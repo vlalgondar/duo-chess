@@ -1,17 +1,22 @@
 import { create } from 'zustand';
+import type { ClientRoomView } from '@duo/shared';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'open' | 'closed';
 
 interface RoomState {
   status: ConnectionStatus;
-  usernames: string[];
+  view: ClientRoomView | null;
+  joinError: string | null;
   setStatus: (status: ConnectionStatus) => void;
-  setUsernames: (usernames: string[]) => void;
+  setView: (view: ClientRoomView) => void;
+  setJoinError: (message: string | null) => void;
 }
 
 export const useRoomStore = create<RoomState>((set) => ({
   status: 'idle',
-  usernames: [],
+  view: null,
+  joinError: null,
   setStatus: (status) => set({ status }),
-  setUsernames: (usernames) => set({ usernames }),
+  setView: (view) => set({ view, joinError: null }),
+  setJoinError: (joinError) => set({ joinError }),
 }));
