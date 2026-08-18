@@ -1,17 +1,20 @@
 import { create } from 'zustand';
 
-export type ConnectionStatus = 'connecting' | 'open' | 'closed';
+export type ConnectionStatus = 'idle' | 'connecting' | 'open' | 'closed';
 
-interface EchoState {
+interface RoomState {
   status: ConnectionStatus;
-  messages: string[];
+  usernames: string[];
   setStatus: (status: ConnectionStatus) => void;
-  addMessage: (message: string) => void;
+  addUsername: (username: string) => void;
 }
 
-export const useEchoStore = create<EchoState>((set) => ({
-  status: 'connecting',
-  messages: [],
+export const useRoomStore = create<RoomState>((set) => ({
+  status: 'idle',
+  usernames: [],
   setStatus: (status) => set({ status }),
-  addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  addUsername: (username) =>
+    set((state) =>
+      state.usernames.includes(username) ? state : { usernames: [...state.usernames, username] },
+    ),
 }));

@@ -6,6 +6,9 @@ coverage/
 .wrangler/
 .turbo/
 *.log
+playwright-report/
+test-results/
+blob-report/
 .DS_Store
 .env
 .env.local

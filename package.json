@@ -7,15 +7,16 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "typecheck": "pnpm -r --parallel typecheck",
+    "typecheck": "pnpm -r --parallel typecheck && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "eslint .",
     "format": "prettier --check .",
     "test": "vitest run",
-    "test:e2e": "echo 'e2e placeholder — implemented in T-05' && exit 0",
+    "test:e2e": "playwright test",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e",
     "build": "pnpm -r --parallel build"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.9.0",
     "eslint": "^9.14.0",
     "eslint-config-prettier": "^9.1.0",
