@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+.wrangler/
+.turbo/
+*.log
+.DS_Store
+.env
+.env.local
+
+# local workflow / spec — not tracked
+.claude/
+CLAUDE.md
+TASKS.md
+docs/
