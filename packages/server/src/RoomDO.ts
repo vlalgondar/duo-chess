@@ -36,4 +36,13 @@ export class RoomDO extends DurableObject {
   override webSocketError(_ws: WebSocket, error: unknown): void {
     console.error('RoomDO websocket error', error);
   }
+
+  /**
+   * Test-only introspection accessor, called via `runInDurableObject` from
+   * the harness — never reachable over the wire. Grows alongside real room
+   * state in later tasks.
+   */
+  debugState(): { socketCount: number } {
+    return { socketCount: this.ctx.getWebSockets().length };
+  }
 }
