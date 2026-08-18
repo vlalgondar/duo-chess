@@ -6,15 +6,12 @@ interface RoomState {
   status: ConnectionStatus;
   usernames: string[];
   setStatus: (status: ConnectionStatus) => void;
-  addUsername: (username: string) => void;
+  setUsernames: (usernames: string[]) => void;
 }
 
 export const useRoomStore = create<RoomState>((set) => ({
   status: 'idle',
   usernames: [],
   setStatus: (status) => set({ status }),
-  addUsername: (username) =>
-    set((state) =>
-      state.usernames.includes(username) ? state : { usernames: [...state.usernames, username] },
-    ),
+  setUsernames: (usernames) => set({ usernames }),
 }));

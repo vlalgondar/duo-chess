@@ -1,3 +1,9 @@
+export * from './types.js';
+export * from './protocol.js';
+export * from './codes.js';
+export * from './roomEngine.js';
+export * from './redactFor.js';
+
 export const PACKAGE_NAME = '@duo/shared';
 
 export const scaffoldGreeting = (who: string): string =>

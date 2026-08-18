@@ -173,7 +173,9 @@ export interface ClientRoomView {
  * `INVALID_PHASE` are room-lifecycle rejections (T-07) not enumerated in the
  * §7 table; the table's list wasn't exhaustive over every action added since
  * it was written, so this union is extended additively as new rejections
- * come up rather than treated as closed.
+ * come up rather than treated as closed. `INVALID_MESSAGE` (malformed JSON or
+ * a schema rejection) and `NOT_JOINED` (any message before `join` completes)
+ * are the transport-level rejections added by the Durable Object (T-09).
  */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
@@ -187,4 +189,6 @@ export type ErrorCode =
   | 'TEAM_FULL'
   | 'SEAT_NOT_FOUND'
   | 'SPECTATOR_NOT_FOUND'
-  | 'INVALID_PHASE';
+  | 'INVALID_PHASE'
+  | 'INVALID_MESSAGE'
+  | 'NOT_JOINED';

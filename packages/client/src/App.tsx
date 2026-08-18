@@ -5,21 +5,21 @@ import { useRoomStore } from './store.js';
 const WS_BASE = import.meta.env.VITE_WS_URL;
 
 /**
- * Ahead of the real `join`/`roster` protocol (T-06+), the DO just broadcasts
- * every message verbatim to every socket in the room — including back to the
- * sender. So a client can build a roster purely by watching for `join`
- * frames, its own included, with no server changes.
+ * Real `state` messages (T-09) carry the full seat list on every join —
+ * pull out usernames for the roster. This is throwaway scaffolding ahead of
+ * the real Home/Lobby (T-10); it only needs to read the shape, not the
+ * whole `ClientRoomView` contract.
  */
-function parseJoinUsername(data: string): string | null {
+function parseRosterUsernames(data: string): string[] | null {
   try {
     const parsed: unknown = JSON.parse(data);
     if (
       typeof parsed === 'object' &&
       parsed !== null &&
-      (parsed as { t?: unknown }).t === 'join' &&
-      typeof (parsed as { username?: unknown }).username === 'string'
+      (parsed as { t?: unknown }).t === 'state' &&
+      Array.isArray((parsed as { seats?: unknown }).seats)
     ) {
-      return (parsed as { username: string }).username;
+      return (parsed as { seats: Array<{ username: string }> }).seats.map((seat) => seat.username);
     }
   } catch {
     return null;
@@ -31,7 +31,7 @@ export function App() {
   const status = useRoomStore((s) => s.status);
   const usernames = useRoomStore((s) => s.usernames);
   const setStatus = useRoomStore((s) => s.setStatus);
-  const addUsername = useRoomStore((s) => s.addUsername);
+  const setUsernames = useRoomStore((s) => s.setUsernames);
 
   const [username, setUsername] = useState('');
   const [code, setCode] = useState('');
@@ -50,11 +50,11 @@ export function App() {
     const ws = connectSocket(url, {
       onOpen: () => {
         setStatus('open');
-        ws.send(JSON.stringify({ t: 'join', username: trimmedUsername }));
+        ws.send(JSON.stringify({ t: 'join', code: trimmedCode, username: trimmedUsername }));
       },
       onMessage: (data) => {
-        const joinedUsername = parseJoinUsername(data);
-        if (joinedUsername) addUsername(joinedUsername);
+        const roster = parseRosterUsernames(data);
+        if (roster) setUsernames(roster);
       },
       onClose: () => setStatus('closed'),
     });

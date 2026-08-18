@@ -18,58 +18,73 @@ function acceptedSocket(response: Response): WebSocket {
   return ws;
 }
 
-function nextMessage(ws: WebSocket): Promise<string> {
+function nextMessage(ws: WebSocket): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('timed out waiting for message')), 2000);
     ws.addEventListener(
       'message',
       (event) => {
         clearTimeout(timeout);
-        resolve(typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data));
+        const raw = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+        resolve(JSON.parse(raw) as Record<string, unknown>);
       },
       { once: true },
     );
   });
 }
 
+function join(ws: WebSocket, code: string, username: string): void {
+  ws.send(JSON.stringify({ t: 'join', code, username }));
+}
+
 describe('websocket transport', () => {
-  it('echo round-trips a message back to the sender', async () => {
-    const response = await exports.default.fetch(wsRequest('ECHO01'));
+  it('upgrades and answers a join with a state message for the sender', async () => {
+    const response = await exports.default.fetch(wsRequest('ECHQ29'));
     expect(response.status).toBe(101);
     const ws = acceptedSocket(response);
 
     const received = nextMessage(ws);
-    ws.send('hello');
-    expect(await received).toBe('hello');
+    join(ws, 'ECHQ29', 'alice');
+    const state = await received;
+    expect(state).toMatchObject({ t: 'state', seq: 1, you: expect.any(String) });
 
     ws.close();
   });
 
   it('shares a Durable Object between two sockets on the same code', async () => {
-    const code = 'SHARE1';
+    const code = 'SHARE9';
     const wsA = acceptedSocket(await exports.default.fetch(wsRequest(code)));
     const wsB = acceptedSocket(await exports.default.fetch(wsRequest(code)));
 
+    join(wsA, code, 'alice');
+    await nextMessage(wsA);
+
     const bReceived = nextMessage(wsB);
-    wsA.send('from-a');
-    expect(await bReceived).toBe('from-a');
+    join(wsB, code, 'bob');
+    const bState = await bReceived;
+    expect(Array.isArray(bState.seats) && bState.seats.length).toBe(2);
 
     wsA.close();
     wsB.close();
   });
 
-  it('does not deliver messages to a socket on a different code', async () => {
-    const wsA = acceptedSocket(await exports.default.fetch(wsRequest('ROOMAA')));
-    const wsB = acceptedSocket(await exports.default.fetch(wsRequest('ROOMBB')));
+  it('does not deliver room state to a socket on a different code', async () => {
+    const wsA = acceptedSocket(await exports.default.fetch(wsRequest('RMAAAA')));
+    const wsB = acceptedSocket(await exports.default.fetch(wsRequest('RMBBBB')));
 
-    let bReceivedAnything = false;
+    join(wsA, 'RMAAAA', 'alice');
+    await nextMessage(wsA);
+
+    let bMessageCount = 0;
     wsB.addEventListener('message', () => {
-      bReceivedAnything = true;
+      bMessageCount += 1;
     });
 
-    wsA.send('leaky?');
+    join(wsB, 'RMBBBB', 'bob');
+    await nextMessage(wsB); // bob's own join state, from RMBBBB
+
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(bReceivedAnything).toBe(false);
+    expect(bMessageCount).toBe(1); // only bob's own state — nothing from RMAAAA
 
     wsA.close();
     wsB.close();

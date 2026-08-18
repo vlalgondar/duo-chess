@@ -205,6 +205,18 @@ export function promoteSpectator(
 }
 
 /**
+ * Marks a seat or spectator's socket as (dis)connected, e.g. on
+ * `webSocketClose`/reconnect in the Durable Object (T-09). A no-op for an
+ * unknown `seatId`, matching `leaveRoom`'s idempotent shape — the caller may
+ * race a close event against a room that's already moved on.
+ */
+export function setConnected(room: Room, seatId: SeatId, connected: boolean, now: number): Room {
+  const seats = room.seats.map((s) => (s.seatId === seatId ? { ...s, connected, lastSeenAt: now } : s));
+  const spectators = room.spectators.map((s) => (s.seatId === seatId ? { ...s, connected } : s));
+  return { ...room, seats, spectators };
+}
+
+/**
  * True only for the four team compositions §5.4 allows to start:
  * `(2,2) (2,1) (1,2) (1,1)`. Neither team may be empty or exceed
  * `MAX_TEAM_SIZE`; unassigned seats simply don't count toward either side.

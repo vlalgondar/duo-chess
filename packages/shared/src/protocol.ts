@@ -296,6 +296,10 @@ const clientRoomViewSchema = z.object({
 export const stateMessageSchema = clientRoomViewSchema.extend({
   t: z.literal('state'),
   seq: z.number().int().nonnegative(),
+  // Present only on the `state` sent to a socket that just (re)joined —
+  // carries the opaque token it should hold onto for §9 reconnection. Never
+  // broadcast to any other socket.
+  resumeToken: z.string().min(1).optional(),
 });
 
 export const patchMessageSchema = z.object({
@@ -363,6 +367,8 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'SEAT_NOT_FOUND',
   'SPECTATOR_NOT_FOUND',
   'INVALID_PHASE',
+  'INVALID_MESSAGE',
+  'NOT_JOINED',
 ]);
 
 export const errorMessageSchema = z.object({

@@ -1,68 +1,74 @@
 import { describe, expect, it } from 'vitest';
-import { spawnRoom } from './harness.js';
+import { spawnRoom, type TestMessage } from './harness.js';
+
+function seatCount(message: TestMessage): number {
+  return Array.isArray(message.seats) ? message.seats.length : -1;
+}
 
 describe('multi-client harness', () => {
   it('connects several named clients and delivers a sent message', async () => {
-    const room = await spawnRoom({ code: 'HARN02' });
+    const room = await spawnRoom({ code: 'HARN2A' });
     const alice = await room.connect({ username: 'alice' });
-    const bob = await room.connect({ username: 'bob' });
+    await alice.expect('state', (m) => seatCount(m) === 1);
 
-    alice.send({ t: 'propose', from: 'e2', to: 'e4' });
-    const received = await bob.expect('propose', (m) => m.from === 'e2' && m.to === 'e4');
-    expect(received.t).toBe('propose');
+    const bob = await room.connect({ username: 'bob' });
+    const seenByAlice = await alice.expect('state', (m) => seatCount(m) === 2);
+    expect(seenByAlice.t).toBe('state');
 
     alice.disconnect();
     bob.disconnect();
   });
 
   it('expectNever resolves cleanly when a message never arrives (cross-room isolation)', async () => {
-    const roomA = await spawnRoom({ code: 'HARN03' });
-    const roomB = await spawnRoom({ code: 'HARN04' });
+    const roomA = await spawnRoom({ code: 'HARN3A' });
+    const roomB = await spawnRoom({ code: 'HARN4A' });
     const alice = await roomA.connect({ username: 'alice' });
     const eve = await roomB.connect({ username: 'eve' });
+    await eve.expect('state', (m) => seatCount(m) === 1);
 
-    alice.send({ t: 'propose', from: 'e2', to: 'e4' });
-    await eve.expectNever('propose', { within: 300 });
+    await roomA.connect({ username: 'bob' });
+    await eve.expectNever('state', { within: 300, predicate: (m) => seatCount(m) === 2 });
 
     alice.disconnect();
     eve.disconnect();
   });
 
-  it('expectNever rejects when a leak actually happens — proving it can catch one', async () => {
-    const room = await spawnRoom({ code: 'HARN05' });
+  it('expectNever rejects when a matching message actually arrives — proving it can catch a leak', async () => {
+    const room = await spawnRoom({ code: 'HARN5A' });
     const alice = await room.connect({ username: 'alice' });
-    const mallory = await room.connect({ username: 'mallory' });
-
-    alice.send({ t: 'secret', payload: 'team-only' });
-
-    await expect(mallory.expectNever('secret', { within: 300 })).rejects.toThrow(/expected never to receive/);
-
-    alice.disconnect();
-    mallory.disconnect();
-  });
-
-  it('drops a socket and reconnects with a resume token, still exchanging messages', async () => {
-    const room = await spawnRoom({ code: 'HARN06' });
-    let alice = await room.connect({ username: 'alice' });
     const bob = await room.connect({ username: 'bob' });
+    await bob.expect('state', (m) => seatCount(m) === 2);
 
-    alice.disconnect();
-    alice = await room.connect({ username: 'alice', resumeToken: 'test-resume-token' });
-
-    alice.send({ t: 'propose', from: 'd2', to: 'd4' });
-    const received = await bob.expect('propose', (m) => m.to === 'd4');
-    expect(received.from).toBe('d2');
+    await expect(
+      bob.expectNever('state', { within: 300, predicate: (m) => seatCount(m) === 2 }),
+    ).rejects.toThrow(/expected never to receive/);
 
     alice.disconnect();
     bob.disconnect();
   });
 
+  it('drops a socket and reconnects with a resume token, still reclaiming the same seat', async () => {
+    const room = await spawnRoom({ code: 'HARN6A' });
+    let alice = await room.connect({ username: 'alice' });
+    const joined = await alice.expect('state', (m) => seatCount(m) === 1);
+    const resumeToken = joined.resumeToken;
+    expect(typeof resumeToken).toBe('string');
+
+    alice.disconnect();
+    alice = await room.connect({ username: 'alice', resumeToken: resumeToken as string });
+    await alice.expect('state', (m) => seatCount(m) === 1);
+
+    alice.disconnect();
+  });
+
   it('debugState reports connected socket count as clients join and leave', async () => {
-    const room = await spawnRoom({ code: 'HARN07' });
+    const room = await spawnRoom({ code: 'HARN7A' });
     expect((await room.debugState()).socketCount).toBe(0);
 
     const alice = await room.connect({ username: 'alice' });
+    await alice.expect('state');
     const bob = await room.connect({ username: 'bob' });
+    await bob.expect('state', (m) => seatCount(m) === 2);
     expect((await room.debugState()).socketCount).toBe(2);
 
     bob.disconnect();
@@ -73,7 +79,7 @@ describe('multi-client harness', () => {
   });
 
   it('advanceTo fires a pending alarm and reports when none is scheduled', async () => {
-    const room = await spawnRoom({ code: 'HARN08' });
+    const room = await spawnRoom({ code: 'HARN8A' });
     await room.connect({ username: 'alice' });
 
     const ran = await room.advanceTo(Date.now() + 1000);

@@ -238,6 +238,12 @@ const SERVER_CASES: Case[] = [
     invalid: { t: 'state', seq: 1, ...STATE_VIEW, game: { ...GAME, status: 'DRAWN' } },
   },
   {
+    name: 'state (with resumeToken, on join/resume only)',
+    schema: stateMessageSchema,
+    valid: { t: 'state', seq: 1, ...STATE_VIEW, resumeToken: 'tok-1' },
+    invalid: { t: 'state', seq: 1, ...STATE_VIEW, resumeToken: '' },
+  },
+  {
     name: 'patch',
     schema: patchMessageSchema,
     valid: { t: 'patch', seq: 2, changes: { fen: 'x' } },

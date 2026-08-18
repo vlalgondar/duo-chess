@@ -8,6 +8,7 @@ import {
   joinRoom,
   leaveRoom,
   promoteSpectator,
+  setConnected,
   setReady,
   setTeam,
   updateSettings,
@@ -318,5 +319,34 @@ describe('canStartGame', () => {
 
   it('ignores unassigned seats sitting alongside a valid split', () => {
     expect(canStartGame(seatsWithTeams(['WHITE', 'BLACK', null]))).toBe(true);
+  });
+});
+
+describe('setConnected', () => {
+  it('marks a seat disconnected and bumps lastSeenAt', () => {
+    const room = roomWithHost();
+    const result = setConnected(room, 'seat-0', false, NOW + 1);
+    expect(result.seats[0]).toMatchObject({ connected: false, lastSeenAt: NOW + 1 });
+  });
+
+  it('marks a seat reconnected', () => {
+    const room = setConnected(roomWithHost(), 'seat-0', false, NOW + 1);
+    const result = setConnected(room, 'seat-0', true, NOW + 2);
+    expect(result.seats[0]).toMatchObject({ connected: true, lastSeenAt: NOW + 2 });
+  });
+
+  it('marks a spectator disconnected without touching lastSeenAt (spectators have none)', () => {
+    const full = roomWithSeats(MAX_SEATS);
+    const withSpectator = joinRoom(full, joiner(MAX_SEATS), NOW);
+    if (!withSpectator.ok || withSpectator.value.role !== 'spectator') {
+      throw new Error('setup expected a spectator');
+    }
+    const result = setConnected(withSpectator.value.room, `seat-${MAX_SEATS}`, false, NOW + 1);
+    expect(result.spectators[0]).toMatchObject({ connected: false });
+  });
+
+  it('is a no-op for an unknown seatId', () => {
+    const room = roomWithHost();
+    expect(setConnected(room, 'nope', false, NOW + 1)).toEqual(room);
   });
 });

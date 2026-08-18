@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
-import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
+import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { exports } from 'cloudflare:workers';
+import type { Room } from '@duo/shared';
 import type { RoomDO } from '../src/worker.js';
 
 export const DEFAULT_ORIGIN = 'http://localhost:5173';
@@ -24,6 +25,8 @@ export interface ExpectOptions {
 
 export interface ExpectNeverOptions {
   readonly within: number;
+  /** Narrows which messages of `type` count as the leak; defaults to matching any. */
+  readonly predicate?: (message: TestMessage) => boolean;
 }
 
 type MessageListener = (message: TestMessage) => void;
@@ -90,9 +93,11 @@ export class TestClient {
     });
   }
 
-  /** Rejects if a message of `type` arrives within `within`ms; otherwise resolves. The leak-detection assertion. */
+  /** Rejects if a message of `type` (matching `predicate`, if given) arrives within `within`ms; otherwise resolves. The leak-detection assertion. */
   async expectNever(type: string, opts: ExpectNeverOptions): Promise<void> {
-    const already = this.received.find((message) => message.t === type);
+    const matches = (message: TestMessage) => message.t === type && (opts.predicate?.(message) ?? true);
+
+    const already = this.received.find(matches);
     if (already) {
       throw new Error(`expected never to receive "${type}", but one already arrived`);
     }
@@ -100,7 +105,7 @@ export class TestClient {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, opts.within);
       const listener: MessageListener = (message) => {
-        if (message.t !== type) return;
+        if (!matches(message)) return;
         clearTimeout(timer);
         this.listeners.delete(listener);
         reject(new Error(`expected never to receive "${type}" within ${opts.within}ms, but it arrived`));
@@ -139,6 +144,7 @@ export class TestRoom {
     const client = new TestClient(opts.username, ws);
     client.send({
       t: 'join',
+      code: this.code,
       username: opts.username,
       ...(opts.resumeToken ? { resumeToken: opts.resumeToken } : {}),
     });
@@ -146,13 +152,23 @@ export class TestRoom {
   }
 
   /** Test-only state snapshot, bypassing `redactFor()` entirely — never call this pattern outside tests. */
-  async debugState(): Promise<{ socketCount: number }> {
+  async debugState(): Promise<{ socketCount: number; room: Room | null }> {
     return runInDurableObject(this.stub, (instance) => instance.debugState());
   }
 
   /** Fires the room's pending alarm immediately, regardless of its deadline. Returns whether one ran. */
   async advanceTo(_deadline?: number): Promise<boolean> {
     return runDurableObjectAlarm(this.stub);
+  }
+
+  /**
+   * Evicts the underlying Durable Object, forcing its next message to
+   * rehydrate from `ctx.storage` via a fresh constructor call — simulates
+   * the runtime relocating/evicting the object between messages (§9).
+   * Hibernatable sockets survive by default (`webSockets: 'hibernate'`).
+   */
+  async forceReset(): Promise<void> {
+    await evictDurableObject(this.stub);
   }
 }
 
