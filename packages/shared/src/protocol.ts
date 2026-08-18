@@ -356,6 +356,11 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'ROOM_FULL',
   'SPECTATORS_DISABLED',
   'RATE_LIMITED',
+  'NOT_HOST',
+  'TEAM_FULL',
+  'SEAT_NOT_FOUND',
+  'SPECTATOR_NOT_FOUND',
+  'INVALID_PHASE',
 ]);
 
 export const errorMessageSchema = z.object({

@@ -163,7 +163,15 @@ export interface ClientRoomView {
   annotations: WireAnnotation[];
 }
 
-/** §7 "Server → Client" error codes. */
+/**
+ * §7 "Server → Client" error codes.
+ *
+ * `NOT_HOST`, `TEAM_FULL`, `SEAT_NOT_FOUND`, `SPECTATOR_NOT_FOUND`, and
+ * `INVALID_PHASE` are room-lifecycle rejections (T-07) not enumerated in the
+ * §7 table; the table's list wasn't exhaustive over every action added since
+ * it was written, so this union is extended additively as new rejections
+ * come up rather than treated as closed.
+ */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
   | 'NOT_YOUR_TURN'
@@ -171,4 +179,9 @@ export type ErrorCode =
   | 'PROPOSAL_CHANGED'
   | 'ROOM_FULL'
   | 'SPECTATORS_DISABLED'
-  | 'RATE_LIMITED';
+  | 'RATE_LIMITED'
+  | 'NOT_HOST'
+  | 'TEAM_FULL'
+  | 'SEAT_NOT_FOUND'
+  | 'SPECTATOR_NOT_FOUND'
+  | 'INVALID_PHASE';

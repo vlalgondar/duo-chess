@@ -1,0 +1,322 @@
+import { describe, expect, it } from 'vitest';
+import {
+  DEFAULT_ROOM_SETTINGS,
+  MAX_SEATS,
+  MAX_SPECTATORS,
+  canStartGame,
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  promoteSpectator,
+  setReady,
+  setTeam,
+  updateSettings,
+} from './roomEngine.js';
+import type { RoomJoiner } from './roomEngine.js';
+import type { Room, Seat } from './types.js';
+
+const NOW = 1_000;
+
+function joiner(n: number): RoomJoiner {
+  return { seatId: `seat-${n}`, publicId: `pub-${n}`, username: `user${n}` };
+}
+
+function roomWithHost(): Room {
+  return createRoom('K7P2QX', joiner(0), NOW);
+}
+
+/** Fills the room to `count` total seats (including the host), unassigned. */
+function roomWithSeats(count: number): Room {
+  let room = roomWithHost();
+  for (let i = 1; i < count; i++) {
+    const result = joinRoom(room, joiner(i), NOW);
+    if (!result.ok || result.value.role !== 'seat') {
+      throw new Error('setup expected a seat');
+    }
+    room = result.value.room;
+  }
+  return room;
+}
+
+describe('createRoom', () => {
+  it('starts in LOBBY with the host as the sole seat', () => {
+    const room = roomWithHost();
+    expect(room.phase).toBe('LOBBY');
+    expect(room.seats).toHaveLength(1);
+    expect(room.seats[0]).toMatchObject({
+      seatId: 'seat-0',
+      isHost: true,
+      team: null,
+      ready: false,
+      connected: true,
+    });
+    expect(room.spectators).toEqual([]);
+    expect(room.game).toBeNull();
+  });
+
+  it('defaults settings when none are given', () => {
+    expect(roomWithHost().settings).toEqual(DEFAULT_ROOM_SETTINGS);
+  });
+
+  it('accepts caller-supplied settings', () => {
+    const settings = { ...DEFAULT_ROOM_SETTINGS, allowSpectators: false };
+    const room = createRoom('K7P2QX', joiner(0), NOW, settings);
+    expect(room.settings).toEqual(settings);
+  });
+});
+
+describe('joinRoom', () => {
+  it('seats a joiner while the room has room', () => {
+    const result = joinRoom(roomWithHost(), joiner(1), NOW);
+    expect(result).toMatchObject({ ok: true, value: { role: 'seat' } });
+    if (result.ok) {
+      expect(result.value.room.seats).toHaveLength(2);
+      expect(result.value.room.seats[1]).toMatchObject({ seatId: 'seat-1', isHost: false });
+    }
+  });
+
+  it(`spectates the ${MAX_SEATS + 1}th joiner once all seats are taken`, () => {
+    const full = roomWithSeats(MAX_SEATS);
+    const result = joinRoom(full, joiner(MAX_SEATS), NOW);
+    expect(result).toMatchObject({ ok: true, value: { role: 'spectator' } });
+    if (result.ok) {
+      expect(result.value.room.seats).toHaveLength(MAX_SEATS);
+      expect(result.value.room.spectators).toHaveLength(1);
+    }
+  });
+
+  it('spectates any joiner while the game is in progress, even with an open seat', () => {
+    const room: Room = { ...roomWithSeats(2), phase: 'IN_GAME' };
+    const result = joinRoom(room, joiner(2), NOW);
+    expect(result).toMatchObject({ ok: true, value: { role: 'spectator' } });
+  });
+
+  it('refuses spectators with SPECTATORS_DISABLED when settings forbid it', () => {
+    const settings = { ...DEFAULT_ROOM_SETTINGS, allowSpectators: false };
+    const full = { ...roomWithSeats(MAX_SEATS), settings };
+    const result = joinRoom(full, joiner(MAX_SEATS), NOW);
+    expect(result).toEqual({ ok: false, code: 'SPECTATORS_DISABLED' });
+  });
+
+  it(`refuses the ${MAX_SPECTATORS + 1}th spectator with ROOM_FULL`, () => {
+    let room = roomWithSeats(MAX_SEATS);
+    for (let i = 0; i < MAX_SPECTATORS; i++) {
+      const result = joinRoom(room, joiner(MAX_SEATS + i), NOW);
+      if (!result.ok) throw new Error('setup expected success');
+      room = result.value.room;
+    }
+    const result = joinRoom(room, joiner(999), NOW);
+    expect(result).toEqual({ ok: false, code: 'ROOM_FULL' });
+  });
+});
+
+describe('leaveRoom', () => {
+  it('removes a seated player', () => {
+    const room = roomWithSeats(2);
+    const after = leaveRoom(room, 'seat-1');
+    expect(after.seats.map((s) => s.seatId)).toEqual(['seat-0']);
+  });
+
+  it('removes a spectator', () => {
+    const full = roomWithSeats(MAX_SEATS);
+    const joined = joinRoom(full, joiner(MAX_SEATS), NOW);
+    if (!joined.ok) throw new Error('setup expected success');
+    const after = leaveRoom(joined.value.room, `seat-${MAX_SEATS}`);
+    expect(after.spectators).toEqual([]);
+  });
+
+  it('promotes the earliest remaining seat to host when the host leaves', () => {
+    const room = roomWithSeats(3);
+    const after = leaveRoom(room, 'seat-0');
+    expect(after.seats.map((s) => s.seatId)).toEqual(['seat-1', 'seat-2']);
+    expect(after.seats[0]!.isHost).toBe(true);
+    expect(after.seats[1]!.isHost).toBe(false);
+  });
+
+  it('is a no-op for an unknown seatId', () => {
+    const room = roomWithHost();
+    expect(leaveRoom(room, 'nobody')).toEqual(room);
+  });
+});
+
+describe('setTeam', () => {
+  it('assigns a seat to a team', () => {
+    const room = roomWithSeats(2);
+    const result = setTeam(room, 'seat-1', 'WHITE', NOW);
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.value.seats.find((s) => s.seatId === 'seat-1')?.team).toBe('WHITE');
+    }
+  });
+
+  it('unassigns with team: null', () => {
+    const room = roomWithSeats(2);
+    const assigned = setTeam(room, 'seat-1', 'WHITE', NOW);
+    if (!assigned.ok) throw new Error('setup expected success');
+    const result = setTeam(assigned.value, 'seat-1', null, NOW);
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.value.seats.find((s) => s.seatId === 'seat-1')?.team).toBeNull();
+    }
+  });
+
+  it('rejects a third player joining an already-full team with TEAM_FULL', () => {
+    const room = roomWithSeats(3);
+    const first = setTeam(room, 'seat-0', 'WHITE', NOW);
+    if (!first.ok) throw new Error('setup expected success');
+    const second = setTeam(first.value, 'seat-1', 'WHITE', NOW);
+    if (!second.ok) throw new Error('setup expected success');
+
+    const third = setTeam(second.value, 'seat-2', 'WHITE', NOW);
+    expect(third).toEqual({ ok: false, code: 'TEAM_FULL' });
+    // rejection must not mutate — the third seat stays unassigned
+    expect(second.value.seats.find((s) => s.seatId === 'seat-2')?.team).toBeNull();
+  });
+
+  it('lets a seat already on a full team re-set the same team (no-op, not a rejection)', () => {
+    const room = roomWithSeats(2);
+    const first = setTeam(room, 'seat-0', 'WHITE', NOW);
+    if (!first.ok) throw new Error('setup expected success');
+    const second = setTeam(first.value, 'seat-1', 'WHITE', NOW);
+    if (!second.ok) throw new Error('setup expected success');
+
+    const result = setTeam(second.value, 'seat-0', 'WHITE', NOW);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('returns SEAT_NOT_FOUND for an unknown seatId', () => {
+    const result = setTeam(roomWithHost(), 'nobody', 'WHITE', NOW);
+    expect(result).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+});
+
+describe('setReady', () => {
+  it('toggles ready', () => {
+    const room = roomWithHost();
+    const result = setReady(room, 'seat-0', true, NOW);
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.value.seats[0]!.ready).toBe(true);
+    }
+  });
+
+  it('returns SEAT_NOT_FOUND for an unknown seatId', () => {
+    const result = setReady(roomWithHost(), 'nobody', true, NOW);
+    expect(result).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+});
+
+describe('updateSettings', () => {
+  const newSettings = { ...DEFAULT_ROOM_SETTINGS, allowSpectators: false };
+
+  it('applies the change for the host', () => {
+    const room = roomWithHost();
+    const result = updateSettings(room, 'seat-0', newSettings);
+    expect(result).toEqual({ ok: true, value: { ...room, settings: newSettings } });
+  });
+
+  it('rejects a non-host with NOT_HOST', () => {
+    const room = roomWithSeats(2);
+    const result = updateSettings(room, 'seat-1', newSettings);
+    expect(result).toEqual({ ok: false, code: 'NOT_HOST' });
+  });
+
+  it('returns SEAT_NOT_FOUND for an unknown actor', () => {
+    const result = updateSettings(roomWithHost(), 'nobody', newSettings);
+    expect(result).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+});
+
+describe('promoteSpectator', () => {
+  function roomWithOneSpectator(): Room {
+    const full = roomWithSeats(MAX_SEATS);
+    const joined = joinRoom(full, joiner(MAX_SEATS), NOW);
+    if (!joined.ok) throw new Error('setup expected success');
+    return joined.value.room;
+  }
+
+  it('moves the spectator into an open seat on the given team', () => {
+    let room = roomWithOneSpectator();
+    room = leaveRoom(room, 'seat-1'); // free a seat
+    const result = promoteSpectator(room, 'seat-0', `pub-${MAX_SEATS}`, 'WHITE', NOW);
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.value.spectators).toEqual([]);
+      const promoted = result.value.seats.find((s) => s.publicId === `pub-${MAX_SEATS}`);
+      expect(promoted).toMatchObject({ seatId: `seat-${MAX_SEATS}`, team: 'WHITE', isHost: false });
+    }
+  });
+
+  it('rejects a non-host with NOT_HOST', () => {
+    const room = roomWithOneSpectator();
+    const result = promoteSpectator(room, 'seat-1', `pub-${MAX_SEATS}`, 'WHITE', NOW);
+    expect(result).toEqual({ ok: false, code: 'NOT_HOST' });
+  });
+
+  it('rejects promotion during IN_GAME with INVALID_PHASE', () => {
+    const room: Room = { ...roomWithOneSpectator(), phase: 'IN_GAME' };
+    const result = promoteSpectator(room, 'seat-0', `pub-${MAX_SEATS}`, 'WHITE', NOW);
+    expect(result).toEqual({ ok: false, code: 'INVALID_PHASE' });
+  });
+
+  it('returns SPECTATOR_NOT_FOUND for an unknown publicId', () => {
+    const room = roomWithOneSpectator();
+    const result = promoteSpectator(room, 'seat-0', 'nobody', 'WHITE', NOW);
+    expect(result).toEqual({ ok: false, code: 'SPECTATOR_NOT_FOUND' });
+  });
+
+  it('returns ROOM_FULL when all 4 seats are already taken', () => {
+    const room = roomWithOneSpectator(); // 4 seats + 1 spectator
+    const result = promoteSpectator(room, 'seat-0', `pub-${MAX_SEATS}`, 'WHITE', NOW);
+    expect(result).toEqual({ ok: false, code: 'ROOM_FULL' });
+  });
+
+  it('returns TEAM_FULL when the target team already has 2 players', () => {
+    let room = roomWithOneSpectator();
+    room = leaveRoom(room, 'seat-2'); // free a seat, keep 2 on WHITE below
+    const first = setTeam(room, 'seat-0', 'WHITE', NOW);
+    if (!first.ok) throw new Error('setup expected success');
+    const second = setTeam(first.value, 'seat-1', 'WHITE', NOW);
+    if (!second.ok) throw new Error('setup expected success');
+
+    const result = promoteSpectator(second.value, 'seat-0', `pub-${MAX_SEATS}`, 'WHITE', NOW);
+    expect(result).toEqual({ ok: false, code: 'TEAM_FULL' });
+  });
+});
+
+describe('canStartGame', () => {
+  function seatsWithTeams(teams: ReadonlyArray<'WHITE' | 'BLACK' | null>): Seat[] {
+    return teams.map((team, i) => ({
+      seatId: `seat-${i}`,
+      publicId: `pub-${i}`,
+      username: `user${i}`,
+      team,
+      isHost: i === 0,
+      connected: true,
+      lastSeenAt: NOW,
+      ready: true,
+    }));
+  }
+
+  it.each([
+    ['2v2', ['WHITE', 'WHITE', 'BLACK', 'BLACK']],
+    ['2v1', ['WHITE', 'WHITE', 'BLACK']],
+    ['1v2', ['WHITE', 'BLACK', 'BLACK']],
+    ['1v1', ['WHITE', 'BLACK']],
+  ] as const)('allows %s', (_label, teams) => {
+    expect(canStartGame(seatsWithTeams(teams))).toBe(true);
+  });
+
+  it('refuses to start with an empty team', () => {
+    expect(canStartGame(seatsWithTeams(['WHITE', 'WHITE']))).toBe(false);
+    expect(canStartGame(seatsWithTeams(['WHITE', null]))).toBe(false);
+  });
+
+  it('refuses a 3-player team', () => {
+    expect(canStartGame(seatsWithTeams(['WHITE', 'WHITE', 'WHITE', 'BLACK']))).toBe(false);
+  });
+
+  it('ignores unassigned seats sitting alongside a valid split', () => {
+    expect(canStartGame(seatsWithTeams(['WHITE', 'BLACK', null]))).toBe(true);
+  });
+});
