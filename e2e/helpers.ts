@@ -8,16 +8,43 @@ export async function openPlayer(page: Page, username: string, code: string): Pr
 }
 
 /**
- * Forward-declared for T-11 (board) and T-12 (mobile shell), which don't
- * exist yet. These assume the square-addressing convention the board
- * component will need to implement: a `data-testid="board"` container and
- * one `[data-square="<square>"]` element per square (e.g. `e4`), plus a
- * `data-testid="legal-dot"` on each legal-move indicator. Unexercised by
- * T-05's own spec — adjust here if the board lands with a different
- * contract.
+ * `react-chessboard` (T-11) drags pieces via native HTML5 drag-and-drop (`react-dnd`'s
+ * `HTML5Backend`), which `Locator.dragTo()` can't drive — it only simulates a mouse
+ * down/move/up sequence, and Chromium's native DnD needs an actual `dragstart`/`dragover`/`drop`
+ * event sequence with a shared `DataTransfer` to recognize it as a drag at all. The waits
+ * between stages are load-bearing, not padding: `react-dnd`'s internal drag-source/monitor
+ * state updates asynchronously, and dispatching the next event before that settles makes the
+ * drop resolve against the wrong (or no) target — confirmed empirically, not a guess.
  */
 export async function dragPiece(page: Page, from: string, to: string): Promise<void> {
-  await page.locator(`[data-square="${from}"]`).dragTo(page.locator(`[data-square="${to}"]`));
+  const targetBox = await page.locator(`[data-square="${to}"]`).boundingBox();
+  if (!targetBox) throw new Error(`drop target square "${to}" not found`);
+  const clientX = targetBox.x + targetBox.width / 2;
+  const clientY = targetBox.y + targetBox.height / 2;
+
+  await page.evaluate(
+    async ({ from, to, clientX, clientY }) => {
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const source = document.querySelector(`[data-square="${from}"] [data-piece]`);
+      const target = document.querySelector(`[data-square="${to}"]`);
+      if (!source || !target) throw new Error('drag source or target square not found');
+
+      const dataTransfer = new DataTransfer();
+      const fire = (element: Element, type: string) =>
+        element.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX, clientY, dataTransfer }));
+
+      fire(source, 'dragstart');
+      await wait(150);
+      fire(target, 'dragenter');
+      await wait(150);
+      fire(target, 'dragover');
+      await wait(150);
+      fire(target, 'drop');
+      await wait(150);
+      fire(source, 'dragend');
+    },
+    { from, to, clientX, clientY },
+  );
 }
 
 export async function tapSquare(page: Page, square: string): Promise<void> {

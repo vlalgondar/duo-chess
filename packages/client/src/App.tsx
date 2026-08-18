@@ -1,13 +1,21 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { generateRoomCode, parseServerMessage, type RoomSettings } from '@duo/shared';
 import { buildRoomUrl, connectSocket, sendMessage } from './net/socket.js';
+import { BoardScreen } from './screens/BoardScreen.js';
 import { Home } from './screens/Home.js';
 import { Lobby } from './screens/Lobby.js';
 import { useRoomStore } from './store.js';
 
 const WS_BASE = import.meta.env.VITE_WS_URL;
 
+/** T-11's local board sandbox, reached via `?fen=<FEN>` — no room/server involved (see `BoardScreen`). */
+function readFenParam(): string | null {
+  return new URLSearchParams(window.location.search).get('fen');
+}
+
 export function App() {
+  const [boardFen] = useState(readFenParam);
+
   const status = useRoomStore((s) => s.status);
   const view = useRoomStore((s) => s.view);
   const joinError = useRoomStore((s) => s.joinError);
@@ -56,6 +64,10 @@ export function App() {
   const handleUpdateSettings = (settings: RoomSettings) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'update_settings', settings });
   };
+
+  if (boardFen) {
+    return <BoardScreen initialFen={boardFen} />;
+  }
 
   if (!view) {
     return (
