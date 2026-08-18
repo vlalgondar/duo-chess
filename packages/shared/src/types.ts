@@ -59,6 +59,9 @@ export interface Proposal {
   proposedAt: number;
 }
 
+/** A Proposal as it travels over the wire: `by` is the proposer's publicId, never their seatId (§10). */
+export type WireProposal = Omit<Proposal, 'by'> & { by: string };
+
 export type AnnotationColor = 'A' | 'B';
 
 export interface Annotation {
@@ -159,7 +162,7 @@ export interface ClientRoomView {
   game: PublicGameState | null;
   chat: ChatMessage[];
   you: string; // publicId
-  proposal: Proposal | null;
+  proposal: WireProposal | null;
   annotations: WireAnnotation[];
 }
 

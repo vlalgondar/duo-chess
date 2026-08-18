@@ -29,6 +29,7 @@ import type {
   TeamVoteKind,
   TimeControl,
   WireAnnotation,
+  WireProposal,
   WireTeamVote,
 } from './types.js';
 
@@ -254,7 +255,8 @@ const publicGameStateSchema: z.ZodType<PublicGameState> = z.object({
   pendingVotes: z.array(wireTeamVoteSchema),
 });
 
-const proposalSchema = z.object({
+/** `by` is the proposer's publicId on the wire, never their seatId (§10). */
+const wireProposalSchema: z.ZodType<WireProposal> = z.object({
   id: z.string(),
   by: z.string(),
   from: squareSchema,
@@ -287,7 +289,7 @@ const clientRoomViewSchema = z.object({
   game: publicGameStateSchema.nullable(),
   chat: z.array(chatMessageSchema),
   you: z.string(),
-  proposal: proposalSchema.nullable(),
+  proposal: wireProposalSchema.nullable(),
   annotations: z.array(wireAnnotationSchema),
 }) satisfies z.ZodType<ClientRoomView>;
 
@@ -304,7 +306,7 @@ export const patchMessageSchema = z.object({
 
 export const proposalUpdateMessageSchema = z.object({
   t: z.literal('proposal_update'),
-  proposal: proposalSchema.nullable(),
+  proposal: wireProposalSchema.nullable(),
 });
 
 export const annotationUpdateMessageSchema = z.object({
