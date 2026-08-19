@@ -171,6 +171,11 @@ export class TestRoom {
     await runInDurableObject(this.stub, (instance) => instance.debugSetVoteExpiryMs(ms));
   }
 
+  /** Test-only room-expiry override — see `RoomDO.debugSetRoomExpiryMs`'s doc comment for why this exists. */
+  async setRoomExpiryMs(ms: number): Promise<void> {
+    await runInDurableObject(this.stub, (instance) => instance.debugSetRoomExpiryMs(ms));
+  }
+
   /**
    * Evicts the underlying Durable Object, forcing its next message to
    * rehydrate from `ctx.storage` via a fresh constructor call — simulates

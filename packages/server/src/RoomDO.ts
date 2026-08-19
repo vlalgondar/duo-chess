@@ -53,6 +53,13 @@ import {
 /** §8/§7: "clock_sync ... Every ~5s and on every commit." */
 const CLOCK_SYNC_INTERVAL_MS = 5_000;
 
+/** §10/T-28: "cap at ~20 messages/second/seat, drop and warn beyond that." */
+const MESSAGE_RATE_LIMIT_COUNT = 20;
+const MESSAGE_RATE_LIMIT_WINDOW_MS = 1_000;
+
+/** §6/T-28: "Rooms expire after 4 hours idle." */
+const ROOM_EXPIRY_MS = 4 * 60 * 60 * 1000;
+
 // Reserved WebSocket close codes (RFC 6455 §7.4.1) — a client that closes
 // without sending an explicit code reports one of these to webSocketClose,
 // and re-sending it verbatim throws.
@@ -109,7 +116,11 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  * queue (rule 4) that already drives flag-fall and abandonment. T-27 adds
  * `ping` (see `handlePing`) — a direct reply to the requesting socket only,
  * no room mutation, so the client's RTT indicator (§8 rule 10) never waits
- * behind a `broadcastState()`.
+ * behind a `broadcastState()`. T-28 adds transport-level hardening that
+ * applies to every message type above rather than any one handler: a
+ * per-socket rate limit (`isRateLimited`, drop-and-warn, not disconnect) and
+ * room expiry after 4 hours idle (`expireRoom`, folded into the same
+ * single-slot deadline queue as everything else).
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -130,6 +141,24 @@ export class RoomDO extends DurableObject {
    * a genuine 30-second wait.
    */
   private voteExpiryMs = VOTE_EXPIRY_MS;
+  /** Sliding 1s window of recent message times, per socket — see `isRateLimited`. */
+  private readonly messageTimestamps = new WeakMap<WebSocket, number[]>();
+  /**
+   * Wall-clock time of the last inbound message on any socket — the "idle"
+   * clock behind room expiry (§6/§10). Deliberately not persisted, same
+   * precedent as `nextClockSyncAt` above: an eviction resetting this to "now"
+   * is harmless (an idle room just takes a little longer to expire), whereas
+   * a room that's genuinely in active use should never expire out from under
+   * it just because it happened to get evicted.
+   */
+  private lastActivityAt = Date.now();
+  /**
+   * §6's 4-hour idle window — an instance field (not persisted, not part of
+   * `Room`/`RoomSettings`, same precedent as `voteExpiryMs`) rather than a
+   * hardcoded constant, so `debugSetRoomExpiryMs` can shrink it for tests
+   * without a real 4-hour wait.
+   */
+  private roomExpiryMs = ROOM_EXPIRY_MS;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -155,7 +184,34 @@ export class RoomDO extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /**
+   * §10/T-28: "cap at ~20 messages/second/seat, drop and warn beyond that."
+   * Counted per-socket rather than per-seat — a seat has exactly one live
+   * socket at a time (a reconnect's resume-token handshake replaces, never
+   * adds to, the socket-to-seat attachment) — so this covers pre-`join`
+   * sockets too, without needing an identity that doesn't exist until `join`
+   * succeeds. A dropped message is answered with a `RATE_LIMITED` error, not
+   * a close — "drop and warn, not disconnect."
+   */
+  private isRateLimited(ws: WebSocket): boolean {
+    const now = Date.now();
+    const recent = (this.messageTimestamps.get(ws) ?? []).filter((t) => now - t < MESSAGE_RATE_LIMIT_WINDOW_MS);
+    if (recent.length >= MESSAGE_RATE_LIMIT_COUNT) {
+      this.messageTimestamps.set(ws, recent);
+      return true;
+    }
+    recent.push(now);
+    this.messageTimestamps.set(ws, recent);
+    return false;
+  }
+
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    if (this.isRateLimited(ws)) {
+      this.sendError(ws, 'RATE_LIMITED', 'too many messages — slow down');
+      return;
+    }
+    this.lastActivityAt = Date.now();
+
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
 
     let json: unknown;
@@ -767,15 +823,40 @@ export class RoomDO extends DurableObject {
   }
 
   /**
-   * Fires when the earliest deadline in the queue (flag-fall or the next
-   * periodic `clock_sync`) is reached. There is exactly one alarm slot per
-   * object (CLAUDE.md rule 4), so this always re-derives and re-arms the
-   * alarm for whatever is next before returning, whether or not it did
-   * anything this time — `scheduleAlarm` is the only place that calls
-   * `ctx.storage.setAlarm()`.
+   * Fires when the earliest deadline in the queue (room expiry, flag-fall,
+   * abandonment, a vote's expiry, or the next periodic `clock_sync`) is
+   * reached. There is exactly one alarm slot per object (CLAUDE.md rule 4),
+   * so this always re-derives and re-arms the alarm for whatever is next
+   * before returning, whether or not it did anything this time —
+   * `scheduleAlarm` is the only place that calls `ctx.storage.setAlarm()`.
    */
   override async alarm(): Promise<void> {
+    try {
+      await this.runAlarm();
+    } catch (error) {
+      // A long-idle object's storage can throw an opaque runtime-level
+      // "internal error" here rather than anything our own code can
+      // meaningfully recover from (T-10/T-26's Findings: observed for a
+      // room whose alarm outlived the local dev session that scheduled it).
+      // Logging and swallowing it keeps one broken object's alarm from
+      // becoming an uncaught rejection — `scheduleAlarm` still gets a
+      // chance to re-arm cleanly the next time this object is invoked.
+      console.error('RoomDO alarm error', error);
+    }
+  }
+
+  private async runAlarm(): Promise<void> {
     const now = Date.now();
+
+    // T-28/§6: room expiry takes priority over everything else below — an
+    // idle room has no game worth resolving a flag-fall/abandonment/vote
+    // for, and `expireRoom` wipes `this.room` outright.
+    if (this.room && now >= this.lastActivityAt + this.roomExpiryMs) {
+      await this.expireRoom();
+      await this.scheduleAlarm(now);
+      return;
+    }
+
     const game = this.room?.game;
 
     if (game && game.status === 'ACTIVE') {
@@ -877,6 +958,26 @@ export class RoomDO extends DurableObject {
     this.broadcastAll({ t: 'game_over', status, winner, reason: GAME_OVER_REASON[status] });
   }
 
+  /**
+   * §6/§10/T-28: "Rooms expire after 4 hours idle." Fully resets the object
+   * back to its pre-first-join state — closes any lingering sockets (this
+   * genuinely is a disconnect, unlike the rate limiter's warn-not-disconnect)
+   * and wipes `ctx.storage`, so the next `join` for this room code starts a
+   * brand-new room via `createRoom`, exactly as if this object had never
+   * been used, rather than resuming stale seats/tokens nobody can act on
+   * anymore.
+   */
+  private async expireRoom(): Promise<void> {
+    for (const socket of this.ctx.getWebSockets()) {
+      if (isSocketOpen(socket)) socket.close(4001, 'room expired');
+    }
+    this.room = null;
+    this.resumeTokens = {};
+    this.seq = 0;
+    this.nextClockSyncAt = undefined;
+    await this.ctx.storage.deleteAll();
+  }
+
   /** `{ whiteMs, blackMs, turnStartedAt, serverNow }` — the client's rAF interpolation resyncs against this (§8.6). */
   private broadcastClockSync(now = Date.now()): void {
     const game = this.room?.game;
@@ -891,9 +992,10 @@ export class RoomDO extends DurableObject {
   }
 
   /**
-   * Recomputes the single alarm slot from the current deadline queue —
-   * flag-fall (if a clock is running) and the next periodic `clock_sync` (if
-   * a game is in progress), each team's abandonment deadline, and every
+   * Recomputes the single alarm slot from the current deadline queue — room
+   * expiry (T-28/§6, always pending once a room exists, regardless of
+   * phase), plus, while a game is actively `IN_GAME`: flag-fall, the next
+   * periodic `clock_sync`, each team's abandonment deadline, and every
    * pending vote's expiry (T-25) — and arms `ctx.storage.setAlarm()` for
    * whichever is soonest. The only place that calls `setAlarm`/`deleteAlarm`,
    * so every caller (join/rehydrate, start_game, propose, vote, the alarm
@@ -902,35 +1004,49 @@ export class RoomDO extends DurableObject {
    */
   private async scheduleAlarm(now = Date.now()): Promise<void> {
     const room = this.room;
-    const game = room?.game;
-    if (!room || !game || room.phase !== 'IN_GAME' || game.status !== 'ACTIVE') {
+    if (!room) {
       this.nextClockSyncAt = undefined;
       await this.ctx.storage.deleteAlarm();
       return;
     }
 
-    if (this.nextClockSyncAt === undefined) {
-      this.nextClockSyncAt = now + CLOCK_SYNC_INTERVAL_MS;
-    }
+    const deadlines = [this.lastActivityAt + this.roomExpiryMs];
 
-    const deadlines = [this.nextClockSyncAt];
-    const flagFall = flagFallDeadline(game.clock, game.sideToMove, room.settings.timeControl);
-    if (flagFall !== null) deadlines.push(flagFall);
+    const game = room.game;
+    if (room.phase === 'IN_GAME' && game && game.status === 'ACTIVE') {
+      if (this.nextClockSyncAt === undefined) {
+        this.nextClockSyncAt = now + CLOCK_SYNC_INTERVAL_MS;
+      }
+      deadlines.push(this.nextClockSyncAt);
 
-    for (const team of ['WHITE', 'BLACK'] as const) {
-      const deadline = abandonmentDeadline(room.seats, team, room.settings.disconnectGraceMs);
-      if (deadline !== null) deadlines.push(deadline);
-    }
+      const flagFall = flagFallDeadline(game.clock, game.sideToMove, room.settings.timeControl);
+      if (flagFall !== null) deadlines.push(flagFall);
 
-    for (const vote of game.pendingVotes) {
-      deadlines.push(vote.expiresAt);
+      for (const team of ['WHITE', 'BLACK'] as const) {
+        const deadline = abandonmentDeadline(room.seats, team, room.settings.disconnectGraceMs);
+        if (deadline !== null) deadlines.push(deadline);
+      }
+
+      for (const vote of game.pendingVotes) {
+        deadlines.push(vote.expiresAt);
+      }
+    } else {
+      this.nextClockSyncAt = undefined;
     }
 
     await this.ctx.storage.setAlarm(Math.min(...deadlines));
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
-    ws.close(RESERVED_CLOSE_CODES.has(code) ? 1000 : code, reason);
+    // The hibernatable API requires the handler to call `ws.close()` to
+    // finish a *client*-initiated close. T-28's `expireRoom()` can also
+    // close a socket from the *server* side (readyState already past OPEN
+    // by the time this handler runs for it) — closing an already-closing
+    // socket again is redundant at best, and risks the second call throwing
+    // and leaving the socket stuck un-finalized in `ctx.getWebSockets()`.
+    if (isSocketOpen(ws)) {
+      ws.close(RESERVED_CLOSE_CODES.has(code) ? 1000 : code, reason);
+    }
 
     const attachment = ws.deserializeAttachment();
     if (!isSocketAttachment(attachment) || !this.room) return;
@@ -991,6 +1107,12 @@ export class RoomDO extends DurableObject {
     ws.serializeAttachment({ seatId } satisfies SocketAttachment);
     await this.persist();
     await this.broadcastState({ seatId, resumeToken: newToken });
+    // T-28/§6: a fresh join is the moment a room first starts existing (or
+    // starts existing *again* after `expireRoom` wiped it) — arm the
+    // room-expiry deadline immediately rather than leaving it unset until
+    // some other mutation happens to call `scheduleAlarm` (e.g. `start_game`
+    // never fires for a room nobody ever starts).
+    await this.scheduleAlarm();
   }
 
   /**
@@ -1083,5 +1205,18 @@ export class RoomDO extends DurableObject {
    */
   debugSetVoteExpiryMs(ms: number): void {
     this.voteExpiryMs = ms;
+  }
+
+  /**
+   * Test-only room-expiry override, same precedent and reason as
+   * `debugSetVoteExpiryMs` above: T-28's harness test needs a genuinely
+   * short idle window to prove the alarm actually expires the room, rather
+   * than waiting out the real 4-hour window. Not part of `Room`/
+   * `RoomSettings` (§6 never lists it as configurable), so — like
+   * `roomExpiryMs` itself — this doesn't persist and resets to
+   * `ROOM_EXPIRY_MS` on eviction.
+   */
+  debugSetRoomExpiryMs(ms: number): void {
+    this.roomExpiryMs = ms;
   }
 }

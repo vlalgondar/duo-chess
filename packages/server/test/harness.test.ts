@@ -79,8 +79,10 @@ describe('multi-client harness', () => {
   });
 
   it('advanceTo fires a pending alarm and reports when none is scheduled', async () => {
+    // T-28: once a room exists, a room-expiry alarm is always pending (see
+    // RoomDO.scheduleAlarm) — so "none scheduled" now means "never joined,"
+    // not "joined but otherwise idle." No `connect()` call here at all.
     const room = await spawnRoom({ code: 'HARN8A' });
-    await room.connect({ username: 'alice' });
 
     const ran = await room.advanceTo(Date.now() + 1000);
     expect(ran).toBe(false);
