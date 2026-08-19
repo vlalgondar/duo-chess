@@ -156,6 +156,11 @@ export function leaveRoom(room: Room, seatId: SeatId): Room {
  * would let a player hop onto whichever side is on move and commit moves
  * that aren't theirs — exactly the class of bug CLAUDE.md rule 2 exists to
  * prevent, invisible in manual testing until someone tries it maliciously.
+ *
+ * Unassigning also clears `ready`: "ready" is meaningless without a side to
+ * play, and leaving it set would let a seat sit in the Unassigned strip
+ * showing a checkmark with no client-side way to clear it once the Ready
+ * toggle is only rendered for a seated team (§5.4/T-17's Team Select UI).
  */
 export function setTeam(room: Room, seatId: SeatId, team: Team | null, now: number): RoomEngineResult<Room> {
   const seat = room.seats.find((s) => s.seatId === seatId);
@@ -167,7 +172,9 @@ export function setTeam(room: Room, seatId: SeatId, team: Team | null, now: numb
     if (teamSize >= MAX_TEAM_SIZE) return fail('TEAM_FULL');
   }
 
-  const seats = room.seats.map((s) => (s.seatId === seatId ? { ...s, team, lastSeenAt: now } : s));
+  const seats = room.seats.map((s) =>
+    s.seatId === seatId ? { ...s, team, ready: team === null ? false : s.ready, lastSeenAt: now } : s,
+  );
   return ok({ ...room, seats });
 }
 

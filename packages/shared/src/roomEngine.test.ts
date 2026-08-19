@@ -205,6 +205,31 @@ describe('setTeam', () => {
       expect(setTeam(room, 'seat-0', 'WHITE', NOW)).toEqual({ ok: false, code: 'INVALID_PHASE' });
     },
   );
+
+  it('clears ready when unassigning — a card with no team has nothing to be ready for', () => {
+    const room = roomWithSeats(2);
+    const teamed = setTeam(room, 'seat-0', 'WHITE', NOW);
+    if (!teamed.ok) throw new Error('setup expected success');
+    const readied = setReady(teamed.value, 'seat-0', true, NOW);
+    if (!readied.ok) throw new Error('setup expected success');
+    expect(readied.value.seats.find((s) => s.seatId === 'seat-0')).toMatchObject({ team: 'WHITE', ready: true });
+
+    const unassigned = setTeam(readied.value, 'seat-0', null, NOW);
+    if (!unassigned.ok) throw new Error('setup expected success');
+    expect(unassigned.value.seats.find((s) => s.seatId === 'seat-0')).toMatchObject({ team: null, ready: false });
+  });
+
+  it('does not touch ready when switching between teams while already ready', () => {
+    const room = roomWithSeats(2);
+    const teamed = setTeam(room, 'seat-0', 'WHITE', NOW);
+    if (!teamed.ok) throw new Error('setup expected success');
+    const readied = setReady(teamed.value, 'seat-0', true, NOW);
+    if (!readied.ok) throw new Error('setup expected success');
+
+    const switched = setTeam(readied.value, 'seat-0', 'BLACK', NOW);
+    if (!switched.ok) throw new Error('setup expected success');
+    expect(switched.value.seats.find((s) => s.seatId === 'seat-0')).toMatchObject({ team: 'BLACK', ready: true });
+  });
 });
 
 describe('setReady', () => {

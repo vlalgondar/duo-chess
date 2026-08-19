@@ -209,14 +209,18 @@ function Card({ seat, isYou, lastError, onSetTeam, onSetReady }: CardProps) {
           >
             ←
           </button>
-          <button
-            type="button"
-            data-testid="ready-toggle"
-            onClick={() => onSetReady(!seat.ready)}
-            className="flex h-11 min-w-[44px] items-center justify-center rounded bg-emerald-700 px-2 text-xs font-semibold disabled:opacity-30"
-          >
-            {seat.ready ? 'Unready' : 'Ready'}
-          </button>
+          {/* §5.4: Ready has nothing to confirm without a side chosen — `setTeam` (roomEngine.ts)
+              also clears `ready` server-side on unassign, so this never hides a stale checkmark. */}
+          {seat.team !== null && (
+            <button
+              type="button"
+              data-testid="ready-toggle"
+              onClick={() => onSetReady(!seat.ready)}
+              className="flex h-11 min-w-[44px] items-center justify-center rounded bg-emerald-700 px-2 text-xs font-semibold disabled:opacity-30"
+            >
+              {seat.ready ? 'Unready' : 'Ready'}
+            </button>
+          )}
           <button
             type="button"
             data-testid="move-right"
