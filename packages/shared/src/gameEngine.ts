@@ -331,6 +331,25 @@ export function setAnnotations(
   };
 }
 
+/**
+ * §9: "If both members of a team disconnect past the grace period, the game
+ * is abandoned and the opposing team wins." Generalizes to any team with
+ * zero *connected* seats, solo or 2-player alike — the same "temporarily
+ * treated as solo" symmetry `requiresConfirmation`/`connectedTeamSize` already
+ * use elsewhere, since a solo team's own player disconnecting is exactly as
+ * game-ending as both members of a 2-player team going dark. `abandonedTeams`
+ * is whichever teams the caller (`RoomDO`, from `roomEngine.abandonmentDeadline`)
+ * found past their grace deadline on a given alarm tick; the pathological case
+ * of both teams crossing it at once (e.g. the whole room dropped together) has
+ * no team left to hand the win to, so it resolves winnerless rather than
+ * picking one arbitrarily.
+ */
+export function resolveAbandonment(abandonedTeams: readonly Team[]): { status: GameStatus; winner: Team | null } {
+  if (abandonedTeams.length !== 1) return { status: 'ABANDONED', winner: null };
+  const [team] = abandonedTeams;
+  return { status: 'ABANDONED', winner: team === 'WHITE' ? 'BLACK' : 'WHITE' };
+}
+
 export function submitMove(
   game: GameState,
   team: Team,

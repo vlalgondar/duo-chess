@@ -8,6 +8,7 @@ import {
   proposeMove,
   rejectProposal,
   requiresConfirmation,
+  resolveAbandonment,
   setAnnotations,
   startGame,
   submitMove,
@@ -559,5 +560,16 @@ describe('board annotations (§5.9)', () => {
     expect(committed.ok).toBe(true);
     if (!committed.ok) return;
     expect(committed.value.annotations).toEqual({ WHITE: [], BLACK: [] });
+  });
+});
+
+describe('resolveAbandonment', () => {
+  it('awards the win to the opposing team when exactly one team abandoned', () => {
+    expect(resolveAbandonment(['WHITE'])).toEqual({ status: 'ABANDONED', winner: 'BLACK' });
+    expect(resolveAbandonment(['BLACK'])).toEqual({ status: 'ABANDONED', winner: 'WHITE' });
+  });
+
+  it('is winnerless if both teams abandoned at once', () => {
+    expect(resolveAbandonment(['WHITE', 'BLACK'])).toEqual({ status: 'ABANDONED', winner: null });
   });
 });

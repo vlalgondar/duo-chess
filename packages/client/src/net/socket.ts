@@ -5,6 +5,52 @@ export function buildRoomUrl(base: string, code: string): string {
   return `${base.replace(/\/+$/, '')}/${code}`;
 }
 
+/** §9's reconnect loop: "exponential backoff (250ms → 500ms → 1s → 2s → 5s cap)". */
+const RECONNECT_DELAYS_MS = [250, 500, 1000, 2000, 5000];
+
+/** `attempt` is 0-indexed (the first retry after a drop); every attempt past the table's end stays capped at 5s. */
+export function reconnectDelayMs(attempt: number): number {
+  return RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)]!;
+}
+
+const SESSION_STORAGE_KEY = 'duo-chess:session';
+
+interface StoredSession {
+  code: string;
+  username: string;
+  resumeToken: string;
+}
+
+/**
+ * §9: "On join, the server issues an opaque `resumeToken` stored in
+ * `sessionStorage`... This handles refreshes, tab switches on mobile, and
+ * brief network drops." Kept here, not in `store.ts`, since it's a browser-
+ * storage side effect rather than in-memory room state.
+ */
+export function saveSession(session: StoredSession): void {
+  window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+export function loadSession(): StoredSession | null {
+  const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      typeof (parsed as StoredSession).code === 'string' &&
+      typeof (parsed as StoredSession).username === 'string' &&
+      typeof (parsed as StoredSession).resumeToken === 'string'
+    ) {
+      return parsed as StoredSession;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export interface SocketHandlers {
   onOpen?: () => void;
   onMessage?: (data: string) => void;

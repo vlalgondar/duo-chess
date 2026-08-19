@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
+  abandonmentDeadline,
   acceptProposal,
   advanceToTeamSelect,
   annotationColorFor,
@@ -14,6 +15,7 @@ import {
   rejectProposal,
   remainingMs,
   requiresConfirmation,
+  resolveAbandonment,
   resolveTimeout,
   sendChatMessage,
   setAnnotations,
@@ -693,6 +695,20 @@ export class RoomDO extends DurableObject {
       }
     }
 
+    // Re-read after a possible flag-fall above — abandonment only applies to
+    // a game that's still actually running.
+    const gameAfterFlagFall = this.room?.game;
+    if (this.room && gameAfterFlagFall && gameAfterFlagFall.status === 'ACTIVE') {
+      const room = this.room;
+      const abandonedTeams = (['WHITE', 'BLACK'] as const).filter((team) => {
+        const deadline = abandonmentDeadline(room.seats, team, room.settings.disconnectGraceMs);
+        return deadline !== null && now >= deadline;
+      });
+      if (abandonedTeams.length > 0) {
+        await this.resolveTeamAbandonment(gameAfterFlagFall, abandonedTeams, now);
+      }
+    }
+
     const activeGame = this.room?.game;
     if (
       this.room?.phase === 'IN_GAME' &&
@@ -721,6 +737,30 @@ export class RoomDO extends DurableObject {
     if (!room || !room.game) return;
 
     const { status, winner } = resolveTimeout(game.fen, flaggedTeam);
+    const clock = {
+      whiteMs: remainingMs(game.clock, 'WHITE', game.sideToMove, now),
+      blackMs: remainingMs(game.clock, 'BLACK', game.sideToMove, now),
+      turnStartedAt: null,
+      running: false,
+    };
+    this.room = { ...room, game: { ...game, status, winner, clock } };
+    await this.persist();
+    await this.broadcastState();
+    this.broadcastAll({ t: 'game_over', status, winner, reason: GAME_OVER_REASON[status] });
+  }
+
+  /**
+   * Ends the game by abandonment (§9) — every seat on each of `abandonedTeams`
+   * has been disconnected past `settings.disconnectGraceMs`. Mirrors
+   * `resolveFlagFall`'s clock-freezing (`remainingMs` at `now`, not whatever
+   * the stored value was) so a game nobody was around to finish doesn't leave
+   * a stale-looking clock behind.
+   */
+  private async resolveTeamAbandonment(game: GameState, abandonedTeams: Team[], now: number): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game) return;
+
+    const { status, winner } = resolveAbandonment(abandonedTeams);
     const clock = {
       whiteMs: remainingMs(game.clock, 'WHITE', game.sideToMove, now),
       blackMs: remainingMs(game.clock, 'BLACK', game.sideToMove, now),
@@ -771,6 +811,11 @@ export class RoomDO extends DurableObject {
     const flagFall = flagFallDeadline(game.clock, game.sideToMove, room.settings.timeControl);
     if (flagFall !== null) deadlines.push(flagFall);
 
+    for (const team of ['WHITE', 'BLACK'] as const) {
+      const deadline = abandonmentDeadline(room.seats, team, room.settings.disconnectGraceMs);
+      if (deadline !== null) deadlines.push(deadline);
+    }
+
     await this.ctx.storage.setAlarm(Math.min(...deadlines));
   }
 
@@ -783,6 +828,11 @@ export class RoomDO extends DurableObject {
     this.room = setConnected(this.room, attachment.seatId, false, Date.now());
     await this.persist();
     await this.broadcastState();
+    // §9: a disconnect can newly start (or shorten) a team's abandonment
+    // grace deadline — re-derive the alarm immediately rather than waiting
+    // for whatever was already scheduled (worst case, the next ~5s clock
+    // sync) to happen to catch it.
+    await this.scheduleAlarm();
   }
 
   override webSocketError(_ws: WebSocket, error: unknown): void {
@@ -806,6 +856,9 @@ export class RoomDO extends DurableObject {
         ws.serializeAttachment({ seatId } satisfies SocketAttachment);
         await this.persist();
         await this.broadcastState({ seatId, resumeToken });
+        // §9: reconnecting can clear a team's abandonment deadline — re-derive
+        // the alarm right away rather than leaving a stale one armed.
+        await this.scheduleAlarm();
         return;
       }
       // Stale or unknown token: fall through and join fresh.

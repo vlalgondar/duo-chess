@@ -282,6 +282,29 @@ export function connectedTeamSize(
 }
 
 /**
+ * When `team`'s 90s-default grace period (§9) will expire if every one of its
+ * seats stays disconnected — `null` if at least one seat is still connected
+ * (no abandonment risk) or the team has no seated members at all. Anchored on
+ * the *latest* `lastSeenAt` among the team's seats rather than a new field:
+ * once `IN_GAME`, `lastSeenAt` only ever moves on a (dis)connect event
+ * (`setTeam`/`setReady` are blocked mid-game — see `setTeam`'s own doc
+ * comment), so the max across a fully-disconnected team's seats is exactly
+ * "when its last connected member went offline." A later reconnect-then-
+ * redisconnect naturally restarts the clock from that fresh timestamp, which
+ * is the same forgiving behavior `connectedTeamSize` already gives a
+ * returning teammate elsewhere.
+ */
+export function abandonmentDeadline(
+  seats: ReadonlyArray<{ team: Team | null; connected: boolean; lastSeenAt: number }>,
+  team: Team,
+  disconnectGraceMs: number,
+): number | null {
+  const members = seats.filter((s) => s.team === team);
+  if (members.length === 0 || members.some((s) => s.connected)) return null;
+  return Math.max(...members.map((s) => s.lastSeenAt)) + disconnectGraceMs;
+}
+
+/**
  * §5.9: "each teammate gets a fixed color ... so you always know who drew
  * what." The mapping is derived from seat order (first of `team`'s two seats
  * is `'A'`, the second — if any — is `'B'`) rather than trusted from the

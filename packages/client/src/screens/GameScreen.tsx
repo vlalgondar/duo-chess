@@ -91,7 +91,12 @@ export function GameScreen({
   const proposal = view.proposal;
   const isProposer = proposal?.by === view.you;
   const proposerUsername = proposal ? view.seats.find((s) => s.publicId === proposal.by)?.username : undefined;
-  const teammateUsername = view.seats.find((s) => s.team === yourTeam && s.publicId !== view.you)?.username;
+  const teammateSeat = view.seats.find((s) => s.team === yourTeam && s.publicId !== view.you);
+  const teammateUsername = teammateSeat?.username;
+  // §9: "the remaining teammate sees 'alice disconnected — you can move
+  // alone'" — derived straight from the roster's own `connected` flag rather
+  // than a dedicated wire message, since `PublicSeat` already carries it.
+  const teammateDisconnected = teammateSeat !== undefined && !teammateSeat.connected;
 
   const boardProposal: ProposalOverlay | null =
     proposal && yourTeam
@@ -142,6 +147,11 @@ export function GameScreen({
         <p data-testid="game-status" className="text-sm text-slate-400">
           {statusText}
         </p>
+        {teammateDisconnected && (
+          <p data-testid="teammate-disconnected" className="text-sm text-amber-400">
+            {teammateUsername} disconnected — you can move alone
+          </p>
+        )}
         {/* §5.7: promotion is never offered here — `onPromote` omitted — since it's
             rejected outside LOBBY/TEAM_SELECT anyway (roomEngine.promoteSpectator). */}
         <Spectators spectators={view.spectators} seats={view.seats} />

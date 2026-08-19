@@ -6,7 +6,15 @@ import { annotationColorFor, type ChatMessage, type ClientRoomView, type WireAnn
  * replay on a fresh `state` anyway. */
 const CHAT_HISTORY_LIMIT = 100;
 
-export type ConnectionStatus = 'idle' | 'connecting' | 'open' | 'closed';
+/**
+ * `reconnecting` (T-24, §9): the socket dropped after a successful join, and
+ * the client is retrying with backoff — distinct from `connecting` (the
+ * initial attempt from Home) and `closed` (gave up / never joined at all).
+ * `view` stays populated with the last known room state through
+ * `reconnecting`, so the UI keeps showing the game/lobby underneath a
+ * banner rather than bouncing back to Home.
+ */
+export type ConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed';
 
 interface RoomState {
   status: ConnectionStatus;

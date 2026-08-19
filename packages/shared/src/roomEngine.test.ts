@@ -6,6 +6,7 @@ import {
   DEFAULT_ROOM_SETTINGS,
   MAX_SEATS,
   MAX_SPECTATORS,
+  abandonmentDeadline,
   advanceToTeamSelect,
   annotationColorFor,
   canStartGame,
@@ -387,6 +388,30 @@ describe('connectedTeamSize', () => {
 
   it('is 0 for a team with no occupied seats', () => {
     expect(connectedTeamSize([seat('WHITE', true)], 'BLACK')).toBe(0);
+  });
+});
+
+describe('abandonmentDeadline', () => {
+  function seat(team: Team | null, connected: boolean, lastSeenAt: number): { team: Team | null; connected: boolean; lastSeenAt: number } {
+    return { team, connected, lastSeenAt };
+  }
+
+  it('is null when at least one seat on the team is still connected', () => {
+    const seats = [seat('WHITE', true, 1_000), seat('WHITE', false, 2_000)];
+    expect(abandonmentDeadline(seats, 'WHITE', 90_000)).toBeNull();
+  });
+
+  it('is null for a team with no seated members', () => {
+    expect(abandonmentDeadline([seat('WHITE', true, 1_000)], 'BLACK', 90_000)).toBeNull();
+  });
+
+  it('is graceMs after the latest disconnect among a fully-disconnected team', () => {
+    const seats = [seat('WHITE', false, 1_000), seat('WHITE', false, 2_500)];
+    expect(abandonmentDeadline(seats, 'WHITE', 90_000)).toBe(2_500 + 90_000);
+  });
+
+  it('is graceMs after a solo team\'s own disconnect', () => {
+    expect(abandonmentDeadline([seat('BLACK', false, 5_000)], 'BLACK', 90_000)).toBe(5_000 + 90_000);
   });
 });
 
