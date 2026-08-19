@@ -16,6 +16,7 @@ import {
   leaveRoom,
   promoteSpectator,
   randomizeTeams,
+  rematch,
   sendChatMessage,
   setConnected,
   setReady,
@@ -600,6 +601,64 @@ describe('randomizeTeams', () => {
 
   it('rejects outside the TEAM_SELECT phase', () => {
     expect(randomizeTeams(roomWithSeats(2), 'seat-0', fixedRandom(0))).toEqual({ ok: false, code: 'INVALID_PHASE' });
+  });
+});
+
+describe('rematch', () => {
+  /** A 2-seat room in `FINISHED` phase, teams/settings intact, everyone `ready` from their last game. */
+  function finishedRoom(): Room {
+    const room = roomWithSeats(2);
+    const advanced = advanceToTeamSelect(room, 'seat-0');
+    if (!advanced.ok) throw new Error('setup expected success');
+    const white = setTeam(advanced.value, 'seat-0', 'WHITE', NOW);
+    if (!white.ok) throw new Error('setup expected success');
+    const black = setTeam(white.value, 'seat-1', 'BLACK', NOW);
+    if (!black.ok) throw new Error('setup expected success');
+
+    return {
+      ...black.value,
+      phase: 'FINISHED',
+      seats: black.value.seats.map((s) => ({ ...s, ready: true })),
+      game: {
+        fen: 'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3',
+        moveHistory: ['f3', 'e5', 'g4', 'Qh4#'],
+        sideToMove: 'WHITE',
+        proposals: { WHITE: null, BLACK: null },
+        annotations: { WHITE: [], BLACK: [] },
+        clock: { whiteMs: 0, blackMs: 0, turnStartedAt: null, running: false },
+        status: 'CHECKMATE',
+        winner: 'BLACK',
+        drawOffer: null,
+        pendingVotes: [],
+      },
+    };
+  }
+
+  it('returns the room to TEAM_SELECT, clears the game, and resets ready — teams and settings retained', () => {
+    const room = finishedRoom();
+    const result = rematch(room, 'seat-0', NOW + 1);
+    if (!result.ok) throw new Error('expected success');
+
+    expect(result.value.phase).toBe('TEAM_SELECT');
+    expect(result.value.game).toBeNull();
+    expect(result.value.settings).toBe(room.settings);
+    expect(result.value.seats.map((s) => [s.seatId, s.team, s.ready])).toEqual([
+      ['seat-0', 'WHITE', false],
+      ['seat-1', 'BLACK', false],
+    ]);
+  });
+
+  it('is not host-gated — any seated player can call it', () => {
+    const result = rematch(finishedRoom(), 'seat-1', NOW + 1);
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects an unknown seat', () => {
+    expect(rematch(finishedRoom(), 'nope', NOW + 1)).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+
+  it('rejects outside the FINISHED phase', () => {
+    expect(rematch(roomWithSeats(2), 'seat-0', NOW + 1)).toEqual({ ok: false, code: 'INVALID_PHASE' });
   });
 });
 

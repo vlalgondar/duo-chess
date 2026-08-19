@@ -8,12 +8,14 @@ import {
   createRoom,
   expireVotes,
   flagFallDeadline,
+  GAME_OVER_REASON,
   joinRoom,
   parseClientMessage,
   promoteSpectator,
   randomizeTeams,
   redactFor,
   rejectProposal,
+  rematch,
   remainingMs,
   requiresConfirmation,
   resolveAbandonment,
@@ -36,7 +38,6 @@ import {
   type ClientRoomView,
   type ErrorCode,
   type GameState,
-  type GameStatus,
   type PromotionPiece,
   type Proposal,
   type Room,
@@ -51,16 +52,6 @@ import {
 
 /** §8/§7: "clock_sync ... Every ~5s and on every commit." */
 const CLOCK_SYNC_INTERVAL_MS = 5_000;
-
-const GAME_OVER_REASON: Record<GameStatus, string> = {
-  ACTIVE: 'active',
-  CHECKMATE: 'Checkmate',
-  STALEMATE: 'Stalemate',
-  DRAW: 'Draw',
-  TIMEOUT: 'Timeout',
-  RESIGNED: 'Resignation',
-  ABANDONED: 'Abandonment',
-};
 
 // Reserved WebSocket close codes (RFC 6455 §7.4.1) — a client that closes
 // without sending an explicit code reports one of these to webSocketClose,
@@ -255,6 +246,11 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'rematch') {
+      await this.handleRematch(ws, attachment.seatId, message.nonce);
+      return;
+    }
+
     // Every other message type is real wire protocol but has no engine
     // behind it yet.
   }
@@ -349,6 +345,29 @@ export class RoomDO extends DurableObject {
       return;
     }
     const result = randomizeTeams(this.room, seatId, Math.random);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
+  }
+
+  /**
+   * `rematch` (§5.6): "Rematch button that returns everyone to team select
+   * with settings retained." Not host-gated — any seated player can trigger
+   * it, unlike `start_game`/`randomize_teams`/`update_settings` above.
+   * `roomEngine.rematch` only allows the `FINISHED` -> `TEAM_SELECT`
+   * transition, resets every seat's `ready` flag, and clears `game` while
+   * leaving `seats` (teams) and `settings` untouched.
+   */
+  private async handleRematch(ws: WebSocket, seatId: string, nonce?: string): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = rematch(this.room, seatId, Date.now());
     if (!result.ok) {
       this.sendError(ws, result.code, result.code, nonce);
       return;
@@ -528,7 +547,10 @@ export class RoomDO extends DurableObject {
    * only set on the accept path (see `handleAccept`).
    */
   private async applyCommit(room: Room, game: GameState, by: string, confirmedBy?: string): Promise<void> {
-    this.room = { ...room, game };
+    // §5.6/T-26: a game-ending commit also advances the room to `FINISHED` —
+    // in the same assignment as `game`, so the `state` broadcast below (which
+    // reaches clients before the `game_over` message) already reflects it.
+    this.room = { ...room, game, phase: game.status === 'ACTIVE' ? room.phase : 'FINISHED' };
     await this.persist();
 
     const san = game.moveHistory.at(-1)!;
@@ -672,7 +694,7 @@ export class RoomDO extends DurableObject {
       return;
     }
 
-    this.room = { ...room, game: result.value };
+    this.room = { ...room, game: result.value, phase: result.value.status === 'ACTIVE' ? room.phase : 'FINISHED' };
     await this.persist();
     await this.broadcastState();
     if (result.value.status !== 'ACTIVE') {
@@ -817,7 +839,7 @@ export class RoomDO extends DurableObject {
       turnStartedAt: null,
       running: false,
     };
-    this.room = { ...room, game: { ...game, status, winner, clock } };
+    this.room = { ...room, game: { ...game, status, winner, clock }, phase: 'FINISHED' };
     await this.persist();
     await this.broadcastState();
     this.broadcastAll({ t: 'game_over', status, winner, reason: GAME_OVER_REASON[status] });
@@ -841,7 +863,7 @@ export class RoomDO extends DurableObject {
       turnStartedAt: null,
       running: false,
     };
-    this.room = { ...room, game: { ...game, status, winner, clock } };
+    this.room = { ...room, game: { ...game, status, winner, clock }, phase: 'FINISHED' };
     await this.persist();
     await this.broadcastState();
     this.broadcastAll({ t: 'game_over', status, winner, reason: GAME_OVER_REASON[status] });

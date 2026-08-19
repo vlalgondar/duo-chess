@@ -16,6 +16,7 @@ import { BoardScreen } from './screens/BoardScreen.js';
 import { GameScreen } from './screens/GameScreen.js';
 import { Home } from './screens/Home.js';
 import { Lobby } from './screens/Lobby.js';
+import { ResultScreen } from './screens/ResultScreen.js';
 import { TeamSelect } from './screens/TeamSelect.js';
 import { useRoomStore } from './store.js';
 
@@ -230,6 +231,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'vote', kind });
   };
 
+  const handleRematch = () => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'rematch' });
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -282,6 +287,15 @@ export function App() {
           onRandomize={handleRandomizeTeams}
           onPromoteSpectator={handlePromoteSpectator}
         />
+      </>
+    );
+  }
+
+  if (view.phase === 'FINISHED') {
+    return (
+      <>
+        {reconnecting && <ReconnectBanner />}
+        <ResultScreen view={view} onRematch={handleRematch} />
       </>
     );
   }

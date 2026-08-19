@@ -406,6 +406,26 @@ export function randomizeTeams(room: Room, actorSeatId: SeatId, random: () => nu
   return ok({ ...room, seats: room.seats.map((s) => ({ ...s, team: teamBySeatId.get(s.seatId)! })) });
 }
 
+/**
+ * `FINISHED` -> `TEAM_SELECT` (§5.6 "Rematch button that returns everyone to
+ * team select with settings retained", T-26). Unlike `advanceToTeamSelect`/
+ * `startGameFromTeamSelect`/`randomizeTeams` above, this is deliberately
+ * **not** host-only — any seated player can call for a rematch. `settings`
+ * and every seat's `team` carry over untouched ("retained"); `ready` resets
+ * for everyone (nobody is ready for a game that hasn't been set up yet, the
+ * same reasoning `setTeam` already applies when a card leaves a team) and
+ * `game` is cleared so the Team Select screen doesn't see a finished game
+ * underneath it.
+ */
+export function rematch(room: Room, actorSeatId: SeatId, now: number): RoomEngineResult<Room> {
+  const actor = room.seats.find((s) => s.seatId === actorSeatId);
+  if (!actor) return fail('SEAT_NOT_FOUND');
+  if (room.phase !== 'FINISHED') return fail('INVALID_PHASE');
+
+  const seats = room.seats.map((s) => ({ ...s, ready: false, lastSeenAt: now }));
+  return ok({ ...room, phase: 'TEAM_SELECT', seats, game: null });
+}
+
 function findChatSender(
   room: Room,
   seatId: SeatId,

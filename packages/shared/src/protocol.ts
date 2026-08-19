@@ -140,6 +140,11 @@ export const voteMessageSchema = withNonce({
   kind: teamVoteKindSchema,
 });
 
+/** §5.6 "Rematch" — no payload; not host-gated, unlike `start_game`/`randomize_teams`. */
+export const rematchMessageSchema = withNonce({
+  t: z.literal('rematch'),
+});
+
 export const chatChannelSchema: z.ZodType<ChatChannel> = z.enum(['TEAM', 'ALL']);
 
 export const chatMessageInputSchema = withNonce({
@@ -197,6 +202,7 @@ export const clientMessageSchema = z.discriminatedUnion('t', [
   acceptMessageSchema,
   rejectMessageSchema,
   voteMessageSchema,
+  rematchMessageSchema,
   chatMessageInputSchema,
   annotateMessageSchema,
   promoteSpectatorMessageSchema,

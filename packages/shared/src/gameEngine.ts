@@ -101,6 +101,22 @@ export function checkGameEnd(
   return endStateOf(replay(sanHistory, startFen));
 }
 
+/**
+ * Human-readable reason text per `GameStatus` (§5.6 Result screen: "Outcome
+ * banner (Checkmate / Stalemate / Time / Resignation / Draw)"), the wire
+ * `game_over.reason` string, and `RoomDO`'s own broadcasts. Shared so the
+ * server and the Result screen never drift on wording.
+ */
+export const GAME_OVER_REASON: Record<GameStatus, string> = {
+  ACTIVE: 'active',
+  CHECKMATE: 'Checkmate',
+  STALEMATE: 'Stalemate',
+  DRAW: 'Draw',
+  TIMEOUT: 'Timeout',
+  RESIGNED: 'Resignation',
+  ABANDONED: 'Abandonment',
+};
+
 export function startGame(timeControl: TimeControl): GameState {
   return {
     fen: new Chess().fen(),
