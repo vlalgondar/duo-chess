@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { TIME_CONTROLS, type ClientRoomView, type RoomSettings } from '@duo/shared';
+import { TIME_CONTROLS, type ClientRoomView, type RoomSettings, type Team } from '@duo/shared';
+import { Spectators } from '../components/Spectators.js';
 
 // docs/DESIGN.md §5.3 gates Start on "every player has picked a team", but
 // team assignment happens on the later Team Select screen (§5.4) per the
@@ -13,9 +14,10 @@ interface LobbyProps {
   view: ClientRoomView;
   onStart: () => void;
   onUpdateSettings: (settings: RoomSettings) => void;
+  onPromoteSpectator: (publicId: string, team: Team) => void;
 }
 
-export function Lobby({ view, onStart, onUpdateSettings }: LobbyProps) {
+export function Lobby({ view, onStart, onUpdateSettings, onPromoteSpectator }: LobbyProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const isHost = you?.isHost ?? false;
   const canStart = view.seats.length >= MIN_PLAYERS_TO_START;
@@ -52,6 +54,12 @@ export function Lobby({ view, onStart, onUpdateSettings }: LobbyProps) {
           </li>
         ))}
       </ul>
+
+      <Spectators
+        spectators={view.spectators}
+        seats={view.seats}
+        onPromote={isHost ? onPromoteSpectator : undefined}
+      />
 
       {isHost ? (
         <HostSettings settings={view.settings} onChange={onUpdateSettings} />

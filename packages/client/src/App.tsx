@@ -112,6 +112,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'randomize_teams' });
   };
 
+  const handlePromoteSpectator = (publicId: string, team: Team) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'promote_spectator', publicId, team });
+  };
+
   const handleMove = (from: Square, to: Square, promotion?: PromotionPiece) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'propose', from, to, promotion });
   };
@@ -175,9 +179,12 @@ export function App() {
         onSetReady={handleSetReady}
         onStart={handleStart}
         onRandomize={handleRandomizeTeams}
+        onPromoteSpectator={handlePromoteSpectator}
       />
     );
   }
 
-  return <Lobby view={view} onStart={handleStart} onUpdateSettings={handleUpdateSettings} />;
+  return (
+    <Lobby view={view} onStart={handleStart} onUpdateSettings={handleUpdateSettings} onPromoteSpectator={handlePromoteSpectator} />
+  );
 }

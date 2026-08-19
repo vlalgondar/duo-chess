@@ -131,4 +131,26 @@ describe('redactFor', () => {
     for (const s of view.seats) expect(s).not.toHaveProperty('seatId');
     for (const s of view.spectators) expect(s).not.toHaveProperty('seatId');
   });
+
+  it.each(VIEWER_TYPES)(
+    // §5.7: a spectator sees "the board, both clocks, the move list ... and the game result" —
+    // the one thing every viewer type, including a spectator, gets in full and unredacted.
+    '%s sees the full public game state (fen, clock, status) — only proposals/annotations/team chat are secret',
+    (kind) => {
+      const view = redactFor(room, viewerFor(kind));
+      expect(view.game).toMatchObject({
+        fen: game.fen,
+        clock: game.clock,
+        status: game.status,
+        winner: game.winner,
+      });
+    },
+  );
+
+  it('spectator sees the roster of both teams and the spectator list, same as a player', () => {
+    const spectatorView = redactFor(room, spectator);
+    const playerView = redactFor(room, white1);
+    expect(spectatorView.seats.map((s) => s.publicId)).toEqual(playerView.seats.map((s) => s.publicId));
+    expect(spectatorView.spectators.map((s) => s.publicId)).toEqual([spectator.publicId]);
+  });
 });

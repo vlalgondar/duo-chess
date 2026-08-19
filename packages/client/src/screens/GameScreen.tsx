@@ -13,6 +13,7 @@ import { Board, type ProposalOverlay } from '../components/Board.js';
 import { BottomSheet } from '../components/BottomSheet.js';
 import { Chat } from '../components/Chat.js';
 import { Clock } from '../components/Clock.js';
+import { Spectators } from '../components/Spectators.js';
 import { TeamPanel } from '../components/TeamPanel.js';
 
 interface GameScreenProps {
@@ -141,6 +142,9 @@ export function GameScreen({
         <p data-testid="game-status" className="text-sm text-slate-400">
           {statusText}
         </p>
+        {/* §5.7: promotion is never offered here — `onPromote` omitted — since it's
+            rejected outside LOBBY/TEAM_SELECT anyway (roomEngine.promoteSpectator). */}
+        <Spectators spectators={view.spectators} seats={view.seats} />
         {showClocks && (
           <Clock
             clock={game.clock}

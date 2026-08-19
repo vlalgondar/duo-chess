@@ -8,6 +8,7 @@ import {
   flagFallDeadline,
   joinRoom,
   parseClientMessage,
+  promoteSpectator,
   randomizeTeams,
   redactFor,
   rejectProposal,
@@ -103,10 +104,12 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  * `randomize_teams`/`update_settings` and makes `start_game` phase-aware
  * (LOBBY -> TEAM_SELECT -> IN_GAME, see `handleStartGame`'s doc comment).
  * T-18/T-20 add `withdraw`/`accept`/`reject`. T-21 adds `chat` (see
- * `handleChat`). T-22 adds `annotate` (see `handleAnnotate`). Every other
- * client -> server message type is valid per the wire protocol but has no
- * engine support yet (spectator promotion, team votes, ...); deliberately
- * left unhandled here for the tasks that build that machinery.
+ * `handleChat`). T-22 adds `annotate` (see `handleAnnotate`). T-23 adds
+ * `promote_spectator` (see `handlePromoteSpectator`) — `join` has spectated
+ * a 5th+ joiner, or anyone joining `IN_GAME`, since T-09/T-07's `joinRoom`.
+ * Every other client -> server message type is valid per the wire protocol
+ * but has no engine support yet (team votes, ...); deliberately left
+ * unhandled here for the tasks that build that machinery.
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -229,9 +232,14 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'promote_spectator') {
+      await this.handlePromoteSpectator(ws, attachment.seatId, message.publicId, message.team, message.nonce);
+      return;
+    }
+
     // Every other message type is real wire protocol but has no engine
-    // behind it yet — later tasks (spectator promotion, team votes, ...) add
-    // the handling as their own machinery lands.
+    // behind it yet — later tasks (team votes, ...) add the handling as
+    // their own machinery lands.
   }
 
   /**
@@ -324,6 +332,34 @@ export class RoomDO extends DurableObject {
       return;
     }
     const result = randomizeTeams(this.room, seatId, Math.random);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
+  }
+
+  /**
+   * `promote_spectator` (§5.7/§7): host-only, moves a spectator into a seat
+   * on `team`. Rejected during `IN_GAME` by `promoteSpectator` itself
+   * (`INVALID_PHASE`) — "mid-game promotion is not allowed" — so this
+   * handler only needs to forward the result, same shape as every other
+   * host-only action above.
+   */
+  private async handlePromoteSpectator(
+    ws: WebSocket,
+    seatId: string,
+    publicId: string,
+    team: Team,
+    nonce?: string,
+  ): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = promoteSpectator(this.room, seatId, publicId, team, Date.now());
     if (!result.ok) {
       this.sendError(ws, result.code, result.code, nonce);
       return;

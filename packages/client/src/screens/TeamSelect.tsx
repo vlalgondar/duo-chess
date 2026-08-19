@@ -1,4 +1,5 @@
 import { canStartGame, MAX_TEAM_SIZE, type ClientRoomView, type PublicSeat, type Team } from '@duo/shared';
+import { Spectators } from '../components/Spectators.js';
 
 /** Mirrors `RoomState['lastError']` (store.ts) — an in-session rejection, not a failed join. */
 type LastError = { code: string; at: number } | null;
@@ -10,6 +11,7 @@ interface TeamSelectProps {
   onSetReady: (ready: boolean) => void;
   onStart: () => void;
   onRandomize: () => void;
+  onPromoteSpectator: (publicId: string, team: Team) => void;
 }
 
 /** Left-to-right strip order (§5.4): Team 1 (white) — Unassigned — Team 2 (black). */
@@ -27,7 +29,15 @@ function neighbor(team: Team | null, direction: -1 | 1): Team | null | undefined
  * state is the only truth" discipline `Board`'s networked mode already uses
  * (§8: "committed moves are not predicted").
  */
-export function TeamSelect({ view, lastError, onSetTeam, onSetReady, onStart, onRandomize }: TeamSelectProps) {
+export function TeamSelect({
+  view,
+  lastError,
+  onSetTeam,
+  onSetReady,
+  onStart,
+  onRandomize,
+  onPromoteSpectator,
+}: TeamSelectProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const isHost = you?.isHost ?? false;
 
@@ -77,6 +87,12 @@ export function TeamSelect({ view, lastError, onSetTeam, onSetReady, onStart, on
           onSetReady={onSetReady}
         />
       </div>
+
+      <Spectators
+        spectators={view.spectators}
+        seats={view.seats}
+        onPromote={isHost ? onPromoteSpectator : undefined}
+      />
 
       {isHost && (
         <button
