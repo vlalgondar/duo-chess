@@ -11,6 +11,8 @@ import {
   type WireAnnotation,
 } from '@duo/shared';
 import { ReconnectBanner } from './components/ReconnectBanner.js';
+import { RttIndicator } from './components/RttIndicator.js';
+import { useWakeLock } from './hooks/useWakeLock.js';
 import { buildRoomUrl, connectSocket, loadSession, reconnectDelayMs, saveSession, sendMessage } from './net/socket.js';
 import { BoardScreen } from './screens/BoardScreen.js';
 import { GameScreen } from './screens/GameScreen.js';
@@ -18,9 +20,13 @@ import { Home } from './screens/Home.js';
 import { Lobby } from './screens/Lobby.js';
 import { ResultScreen } from './screens/ResultScreen.js';
 import { TeamSelect } from './screens/TeamSelect.js';
+import { playGameOverSound, playMoveSound } from './sound.js';
 import { useRoomStore } from './store.js';
 
 const WS_BASE = import.meta.env.VITE_WS_URL;
+
+/** §8 rule 10: frequent enough for a live-feeling indicator, cheap enough to run forever. */
+const PING_INTERVAL_MS = 4_000;
 
 /** T-11's local board sandbox, reached via `?fen=<FEN>` — no room/server involved (see `BoardScreen`). */
 function readFenParam(): string | null {
@@ -35,11 +41,15 @@ export function App() {
   const joinError = useRoomStore((s) => s.joinError);
   const serverClockOffsetMs = useRoomStore((s) => s.serverClockOffsetMs);
   const lastError = useRoomStore((s) => s.lastError);
+  const rttMs = useRoomStore((s) => s.rttMs);
+  const soundEnabled = useRoomStore((s) => s.soundEnabled);
+  const toggleSound = useRoomStore((s) => s.toggleSound);
   const setStatus = useRoomStore((s) => s.setStatus);
   const setView = useRoomStore((s) => s.setView);
   const setJoinError = useRoomStore((s) => s.setJoinError);
   const setServerClockOffsetMs = useRoomStore((s) => s.setServerClockOffsetMs);
   const setLastError = useRoomStore((s) => s.setLastError);
+  const setRttMs = useRoomStore((s) => s.setRttMs);
   const appendChatMessage = useRoomStore((s) => s.appendChatMessage);
   const applyAnnotationUpdate = useRoomStore((s) => s.applyAnnotationUpdate);
 
@@ -122,6 +132,12 @@ export function App() {
           appendChatMessage(parsed.value.message);
         } else if (parsed.value.t === 'annotation_update') {
           applyAnnotationUpdate(parsed.value.by, parsed.value.annotations);
+        } else if (parsed.value.t === 'move_committed') {
+          if (useRoomStore.getState().soundEnabled) playMoveSound(parsed.value.san.includes('x'));
+        } else if (parsed.value.t === 'game_over') {
+          if (useRoomStore.getState().soundEnabled) playGameOverSound();
+        } else if (parsed.value.t === 'pong') {
+          setRttMs(Date.now() - parsed.value.ts);
         } else if (parsed.value.t === 'error') {
           if (hasJoinedRef.current) {
             setLastError(parsed.value.code);
@@ -178,6 +194,41 @@ export function App() {
     const session = loadSession();
     if (session) connect(session.code, session.username, session.resumeToken);
   }, []);
+
+  // §8 rule 10: periodic `ping`/`pong` round trip driving the RTT indicator.
+  // Sends immediately on connecting (not just after the first interval tick)
+  // so the indicator lights up promptly rather than staying blank for 4s.
+  useEffect(() => {
+    if (status !== 'open') return;
+    const sendPing = () => {
+      if (wsRef.current) sendMessage(wsRef.current, { t: 'ping', ts: Date.now() });
+    };
+    sendPing();
+    const interval = setInterval(sendPing, PING_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [status]);
+
+  // §5.10/§9: "when the tab is backgrounded, keep the socket open ... on
+  // return, force a full `state` resync rather than trusting the
+  // interpolated clock." A repeat `join` on an already-attached socket is
+  // `RoomDO.handleJoin`'s own existing resync path (a fresh `code`/`username`
+  // aren't even read in that branch) — this reuses it rather than inventing
+  // a second wire message for the same thing.
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState !== 'visible' || !hasJoinedRef.current || !wsRef.current) return;
+      sendMessage(wsRef.current, {
+        t: 'join',
+        code: codeRef.current,
+        username: usernameRef.current,
+        ...(resumeTokenRef.current ? { resumeToken: resumeTokenRef.current } : {}),
+      });
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  useWakeLock(view?.phase === 'IN_GAME');
 
   const handleStart = () => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'start_game' });
@@ -259,6 +310,9 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
+        <div className="fixed right-3 top-3 z-50">
+          <RttIndicator rttMs={rttMs} />
+        </div>
         <GameScreen
           view={view}
           onMove={handleMove}
@@ -269,6 +323,8 @@ export function App() {
           onAnnotate={handleAnnotate}
           onVote={handleVote}
           serverClockOffsetMs={serverClockOffsetMs}
+          soundEnabled={soundEnabled}
+          onToggleSound={toggleSound}
         />
       </>
     );
@@ -278,6 +334,9 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
+        <div className="fixed right-3 top-3 z-50">
+          <RttIndicator rttMs={rttMs} />
+        </div>
         <TeamSelect
           view={view}
           lastError={lastError}
@@ -295,6 +354,9 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
+        <div className="fixed right-3 top-3 z-50">
+          <RttIndicator rttMs={rttMs} />
+        </div>
         <ResultScreen view={view} onRematch={handleRematch} />
       </>
     );

@@ -14,6 +14,7 @@ import { Board, type ProposalOverlay } from '../components/Board.js';
 import { BottomSheet } from '../components/BottomSheet.js';
 import { Chat } from '../components/Chat.js';
 import { Clock } from '../components/Clock.js';
+import { SoundToggle } from '../components/SoundToggle.js';
 import { Spectators } from '../components/Spectators.js';
 import { TeamPanel } from '../components/TeamPanel.js';
 import { VoteActions } from '../components/VoteActions.js';
@@ -28,6 +29,8 @@ interface GameScreenProps {
   onAnnotate: (annotations: WireAnnotation[]) => void;
   onVote: (kind: TeamVoteKind) => void;
   serverClockOffsetMs: number;
+  soundEnabled: boolean;
+  onToggleSound: () => void;
 }
 
 // docs/DESIGN.md §5.9's "team's accent color" — one color per team (not per teammate; that
@@ -66,6 +69,8 @@ export function GameScreen({
   onAnnotate,
   onVote,
   serverClockOffsetMs,
+  soundEnabled,
+  onToggleSound,
 }: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const yourTeam = you?.team ?? null;
@@ -148,6 +153,9 @@ export function GameScreen({
       className="flex min-h-dvh flex-col bg-slate-950 text-slate-100 min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
     >
       <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:p-0">
+        <div className="flex items-center gap-2">
+          <SoundToggle enabled={soundEnabled} onToggle={onToggleSound} />
+        </div>
         <p data-testid="game-status" className="text-sm text-slate-400">
           {statusText}
         </p>

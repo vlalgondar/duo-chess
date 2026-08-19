@@ -24,6 +24,13 @@ function formatRemaining(ms: number): string {
  * server's own alarm scheduling is built on, `clock.ts`) so the countdown
  * and the server's flag-fall deadline can never silently disagree on the
  * arithmetic.
+ *
+ * §5.10/§9: "handle `visibilitychange`: when the tab is backgrounded, keep
+ * the socket open but stop the animation loop." The loop stops entirely
+ * (not just skips a `setRemaining`) while `document.hidden`, and restarts
+ * immediately on return — by then `App.tsx`'s own `visibilitychange`
+ * listener has already re-sent `join` to force a fresh `state`, so the very
+ * first recomputed tick here is against up-to-date `clock`/`sideToMove`.
  */
 export function Clock({ clock, team, sideToMove, serverClockOffsetMs, active }: ClockProps) {
   const [remaining, setRemaining] = useState(() =>
@@ -31,13 +38,30 @@ export function Clock({ clock, team, sideToMove, serverClockOffsetMs, active }: 
   );
 
   useEffect(() => {
-    let frame: number;
+    let frame: number | null = null;
+
     const tick = () => {
       setRemaining(remainingMs(clock, team, sideToMove, Date.now() + serverClockOffsetMs));
       frame = requestAnimationFrame(tick);
     };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+
+    const start = () => {
+      if (frame === null && document.visibilityState === 'visible') frame = requestAnimationFrame(tick);
+    };
+    const stop = () => {
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+        frame = null;
+      }
+    };
+    const handleVisibilityChange = () => (document.visibilityState === 'visible' ? start() : stop());
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    start();
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stop();
+    };
   }, [clock, team, sideToMove, serverClockOffsetMs]);
 
   const low = active && remaining <= 10_000;
@@ -50,6 +74,11 @@ export function Clock({ clock, team, sideToMove, serverClockOffsetMs, active }: 
       } ${low ? 'text-red-400' : ''}`}
     >
       {formatRemaining(remaining)}
+      {/* Test-only accessor (same spirit as `Board`'s `data-testid="fen"`) — `formatRemaining`
+          rounds to the second, too coarse to assert the visibilitychange resync's 250ms budget. */}
+      <span data-testid={`clock-ms-${team.toLowerCase()}`} className="sr-only">
+        {remaining}
+      </span>
     </span>
   );
 }

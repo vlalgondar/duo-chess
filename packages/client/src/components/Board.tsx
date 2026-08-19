@@ -39,6 +39,11 @@ const RING_STYLE: CSSProperties = {
   pointerEvents: 'none',
 };
 
+// §5.3: "Also trigger on hover of your own pieces at low opacity" — same shapes as the
+// click-selected dot/ring, just fainter, and left un-selected on click (hover only).
+const HOVER_DOT_STYLE: CSSProperties = { ...DOT_STYLE, opacity: 0.5 };
+const HOVER_RING_STYLE: CSSProperties = { ...RING_STYLE, opacity: 0.5 };
+
 interface LastMove {
   from: Square;
   to: Square;
@@ -87,16 +92,26 @@ function makeSquareContent(
   dotSquares: Set<Square>,
   ringSquares: Set<Square>,
   ghost: { square: Square; glyph: string; accentColor: string } | null,
+  hoverDotSquares: Set<Square>,
+  hoverRingSquares: Set<Square>,
+  onHoverSquare: ((square: Square | null) => void) | undefined,
 ) {
   const SquareContent = forwardRef<HTMLDivElement, SquareContentProps>(function SquareContent(
     { children, square, style },
     ref,
   ) {
     return (
-      <div ref={ref} style={{ ...style, position: 'relative' }}>
+      <div
+        ref={ref}
+        style={{ ...style, position: 'relative' }}
+        onMouseEnter={onHoverSquare && (() => onHoverSquare(square as Square))}
+        onMouseLeave={onHoverSquare && (() => onHoverSquare(null))}
+      >
         {children}
         {dotSquares.has(square as Square) && <div data-testid="legal-dot" style={DOT_STYLE} />}
         {ringSquares.has(square as Square) && <div data-testid="legal-ring" style={RING_STYLE} />}
+        {hoverDotSquares.has(square as Square) && <div data-testid="legal-dot-hover" style={HOVER_DOT_STYLE} />}
+        {hoverRingSquares.has(square as Square) && <div data-testid="legal-ring-hover" style={HOVER_RING_STYLE} />}
         {ghost && ghost.square === square && (
           <div
             data-testid="proposal-ghost"
@@ -240,6 +255,16 @@ export function Board({
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
 
+  // §5.3: "Also trigger on hover of your own pieces at low opacity" — desktop only (a touch
+  // device has no hover state to speak of); computed once, since a device's pointer capability
+  // doesn't change mid-session. Suppressed once a piece is actually selected — the click-selected
+  // dots already cover that square, so a second, fainter set underneath would be pure clutter.
+  const [desktopHover] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches,
+  );
+  const [hoverSquare, setHoverSquare] = useState<Square | null>(null);
+  const hoverEnabled = desktopHover && !locked && !pendingPromotion && selected === null;
+
   // T-22 board annotations (§5.9). `annotationsEnabled` is false for the local sandbox and for
   // spectators/unassigned seats — neither has a color to draw with.
   const annotationsEnabled = ownAnnotationColor !== undefined;
@@ -354,6 +379,20 @@ export function Board({
     () => new Set(legalMoves.filter((move) => move.captured !== undefined).map((move) => move.to)),
     [legalMoves],
   );
+
+  const hoverMoves = useMemo(
+    () => (hoverEnabled && hoverSquare ? game.moves({ square: hoverSquare, verbose: true }) : []),
+    [game, hoverEnabled, hoverSquare, fen],
+  );
+  const hoverDotSquares = useMemo(
+    () => new Set(hoverMoves.filter((move) => move.captured === undefined).map((move) => move.to)),
+    [hoverMoves],
+  );
+  const hoverRingSquares = useMemo(
+    () => new Set(hoverMoves.filter((move) => move.captured !== undefined).map((move) => move.to)),
+    [hoverMoves],
+  );
+
   const checkSquare = useMemo(
     () => (game.inCheck() ? game.findPiece({ type: 'k', color: game.turn() })[0] ?? null : null),
     [game, fen],
@@ -378,7 +417,18 @@ export function Board({
     return { square: proposal.to, glyph: GHOST_GLYPHS[piece.color][type], accentColor: proposal.accentColor };
   }, [proposal, game, fen]);
 
-  const SquareContent = useMemo(() => makeSquareContent(dotSquares, ringSquares, ghost), [dotSquares, ringSquares, ghost]);
+  const SquareContent = useMemo(
+    () =>
+      makeSquareContent(
+        dotSquares,
+        ringSquares,
+        ghost,
+        hoverDotSquares,
+        hoverRingSquares,
+        hoverEnabled ? setHoverSquare : undefined,
+      ),
+    [dotSquares, ringSquares, ghost, hoverDotSquares, hoverRingSquares, hoverEnabled],
+  );
 
   const arrow = useMemo(() => {
     if (!proposal) return null;

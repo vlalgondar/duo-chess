@@ -106,7 +106,10 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  * a 5th+ joiner, or anyone joining `IN_GAME`, since T-09/T-07's `joinRoom`.
  * T-25 adds `vote` (see `handleVote`) — resign/draw-offer/draw-accept, the
  * generic `TeamVote` mechanic, folded into the same single-slot deadline
- * queue (rule 4) that already drives flag-fall and abandonment.
+ * queue (rule 4) that already drives flag-fall and abandonment. T-27 adds
+ * `ping` (see `handlePing`) — a direct reply to the requesting socket only,
+ * no room mutation, so the client's RTT indicator (§8 rule 10) never waits
+ * behind a `broadcastState()`.
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -248,6 +251,11 @@ export class RoomDO extends DurableObject {
 
     if (message.t === 'rematch') {
       await this.handleRematch(ws, attachment.seatId, message.nonce);
+      return;
+    }
+
+    if (message.t === 'ping') {
+      this.handlePing(ws, message.ts);
       return;
     }
 
@@ -1014,6 +1022,12 @@ export class RoomDO extends DurableObject {
 
   private sendError(ws: WebSocket, code: ErrorCode, message: string, nonce?: string): void {
     ws.send(JSON.stringify({ t: 'error', code, message, nonce }));
+  }
+
+  /** §7: "RTT measurement; server replies `pong`" — echoes `ts` straight back with the server's own clock, no room state touched. */
+  private handlePing(ws: WebSocket, ts: number): void {
+    if (!isSocketOpen(ws)) return;
+    ws.send(JSON.stringify({ t: 'pong', ts, serverNow: Date.now() }));
   }
 
   /**

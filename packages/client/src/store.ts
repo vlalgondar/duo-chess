@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { annotationColorFor, type ChatMessage, type ClientRoomView, type WireAnnotation } from '@duo/shared';
+import { loadSoundEnabled, saveSoundEnabled } from './sound.js';
 
 /** Mirrors the server's own retention cap (`CHAT_HISTORY_LIMIT` in `roomEngine.ts`) so a long
  * session's locally-accumulated `chat_message`s can't grow past what the server would ever
@@ -39,11 +40,17 @@ interface RoomState {
    * on it still re-fires.
    */
   lastError: { code: string; at: number } | null;
+  /** §8 rule 10: last `ping`/`pong` round-trip time, `null` before the first reply arrives. */
+  rttMs: number | null;
+  /** T-27 "Sounds (mutable, default off on mobile)" — user-toggleable, persisted to `localStorage`. */
+  soundEnabled: boolean;
   setStatus: (status: ConnectionStatus) => void;
   setView: (view: ClientRoomView) => void;
   setJoinError: (message: string | null) => void;
   setServerClockOffsetMs: (offsetMs: number) => void;
   setLastError: (code: string) => void;
+  setRttMs: (rttMs: number) => void;
+  toggleSound: () => void;
   /**
    * `chat_message` (§7) is a small per-message broadcast, not a full `state`
    * resync (§8 "deltas over snapshots") — the store appends it to the
@@ -68,11 +75,20 @@ export const useRoomStore = create<RoomState>((set) => ({
   joinError: null,
   serverClockOffsetMs: 0,
   lastError: null,
+  rttMs: null,
+  soundEnabled: loadSoundEnabled(window.matchMedia('(pointer: coarse)').matches),
   setStatus: (status) => set({ status }),
   setView: (view) => set({ view, joinError: null }),
   setJoinError: (joinError) => set({ joinError }),
   setServerClockOffsetMs: (serverClockOffsetMs) => set({ serverClockOffsetMs }),
   setLastError: (code) => set({ lastError: { code, at: Date.now() } }),
+  setRttMs: (rttMs) => set({ rttMs }),
+  toggleSound: () =>
+    set((state) => {
+      const soundEnabled = !state.soundEnabled;
+      saveSoundEnabled(soundEnabled);
+      return { soundEnabled };
+    }),
   appendChatMessage: (message) =>
     set((state) =>
       state.view
