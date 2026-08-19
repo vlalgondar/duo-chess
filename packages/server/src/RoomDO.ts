@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   acceptProposal,
   advanceToTeamSelect,
+  annotationColorFor,
   connectedTeamSize,
   createRoom,
   flagFallDeadline,
@@ -14,14 +15,17 @@ import {
   requiresConfirmation,
   resolveTimeout,
   sendChatMessage,
+  setAnnotations,
   setConnected,
   setReady,
   setTeam,
   startGameFromTeamSelect,
   submitMove,
+  toWireAnnotation,
   toWireProposal,
   updateSettings,
   withdrawProposal,
+  type Annotation,
   type ChatChannel,
   type ClientRoomView,
   type ErrorCode,
@@ -35,6 +39,7 @@ import {
   type Spectator,
   type Square,
   type Team,
+  type WireAnnotation,
 } from '@duo/shared';
 
 /** §8/§7: "clock_sync ... Every ~5s and on every commit." */
@@ -98,10 +103,10 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  * `randomize_teams`/`update_settings` and makes `start_game` phase-aware
  * (LOBBY -> TEAM_SELECT -> IN_GAME, see `handleStartGame`'s doc comment).
  * T-18/T-20 add `withdraw`/`accept`/`reject`. T-21 adds `chat` (see
- * `handleChat`). Every other client -> server message type is valid per the
- * wire protocol but has no engine support yet (annotations, spectator
- * promotion, team votes, ...); deliberately left unhandled here for the
- * tasks that build that machinery.
+ * `handleChat`). T-22 adds `annotate` (see `handleAnnotate`). Every other
+ * client -> server message type is valid per the wire protocol but has no
+ * engine support yet (spectator promotion, team votes, ...); deliberately
+ * left unhandled here for the tasks that build that machinery.
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -219,9 +224,14 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'annotate') {
+      await this.handleAnnotate(ws, attachment.seatId, message.annotations, message.nonce);
+      return;
+    }
+
     // Every other message type is real wire protocol but has no engine
-    // behind it yet — later tasks (annotations, spectator promotion, team
-    // votes, ...) add the handling as their own machinery lands.
+    // behind it yet — later tasks (spectator promotion, team votes, ...) add
+    // the handling as their own machinery lands.
   }
 
   /**
@@ -544,6 +554,44 @@ export class RoomDO extends DurableObject {
   }
 
   /**
+   * `annotate` (§5.9/§7): "Full replacement of your own set." `color` is
+   * derived server-side from seat order (`annotationColorFor`), never
+   * trusted from the wire (same reasoning as every other client-supplied
+   * value that's actually derivable). Deliberately **not persisted** — §9
+   * "Annotations are intentionally not persisted... held in memory only" —
+   * so unlike every other mutation in this file, there is no `this.persist()`
+   * call here; `this.room` is updated in memory only, and a later,
+   * unrelated `persist()` call incidentally carrying the live set to storage
+   * is harmless (the next commit clears it anyway).
+   */
+  private async handleAnnotate(
+    ws: WebSocket,
+    seatId: string,
+    annotations: WireAnnotation[],
+    nonce?: string,
+  ): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game || room.phase !== 'IN_GAME') {
+      this.sendError(ws, 'ILLEGAL_MOVE', 'no game in progress', nonce);
+      return;
+    }
+    const seat = room.seats.find((s) => s.seatId === seatId);
+    const team = seat?.team;
+    if (!seat || !team) {
+      this.sendError(ws, 'NOT_YOUR_TURN', 'not a player in this game', nonce);
+      return;
+    }
+
+    const teamMemberIds = room.seats.filter((s) => s.team === team).map((s) => s.seatId);
+    const color = annotationColorFor(teamMemberIds, seatId);
+    const game = setAnnotations(room.game, team, seatId, color, annotations);
+    this.room = { ...room, game };
+
+    const ownAnnotations = game.annotations[team].filter((a) => a.by === seatId);
+    this.broadcastAnnotationUpdate(team, seat.publicId, ownAnnotations);
+  }
+
+  /**
    * Sends `message` only to sockets belonging to `team` — the shared loop
    * behind both `proposal_update` (§4.3) and `TEAM` `chat_message` (§5.8),
    * the two team-scoped-but-not-full-`state` broadcasts. Spectators are
@@ -574,6 +622,19 @@ export class RoomDO extends DurableObject {
     const room = this.room;
     if (!room) return;
     const message = { t: 'proposal_update', proposal: proposal ? toWireProposal(room, proposal) : null };
+    this.broadcastToTeam(team, message);
+  }
+
+  /**
+   * `annotation_update` (§7/§5.9): team-scoped, `by` identifies whose full
+   * set this is (the recipient's own client merges it into whichever slice
+   * of its local annotation state belongs to that author — see the client's
+   * own `annotationColorFor` usage). Reuses `toWireAnnotation` rather than
+   * re-deriving the seatId-stripping, same precedent as `toWireProposal`
+   * above (CLAUDE.md rule 3).
+   */
+  private broadcastAnnotationUpdate(team: Team, by: string, annotations: Annotation[]): void {
+    const message = { t: 'annotation_update', by, annotations: annotations.map(toWireAnnotation) };
     this.broadcastToTeam(team, message);
   }
 

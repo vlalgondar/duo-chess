@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, ClientRoomView } from '@duo/shared';
+import { annotationColorFor, type ChatMessage, type ClientRoomView, type WireAnnotation } from '@duo/shared';
 
 /** Mirrors the server's own retention cap (`CHAT_HISTORY_LIMIT` in `roomEngine.ts`) so a long
  * session's locally-accumulated `chat_message`s can't grow past what the server would ever
@@ -44,6 +44,14 @@ interface RoomState {
    * `join` completes).
    */
   appendChatMessage: (message: ChatMessage) => void;
+  /**
+   * `annotation_update` (§7): `by`'s full set replaces whatever `view.annotations` previously
+   * held for that same author, leaving the other teammate's entries untouched. `WireAnnotation`
+   * carries no `by` (§10 — a teammate's `color` is already fixed and unambiguous), so the
+   * author's color is recomputed the same way the server did (`annotationColorFor`, keyed by
+   * seat order) rather than trusted from the message, and used as the merge key.
+   */
+  applyAnnotationUpdate: (by: string, annotations: WireAnnotation[]) => void;
 }
 
 export const useRoomStore = create<RoomState>((set) => ({
@@ -63,4 +71,14 @@ export const useRoomStore = create<RoomState>((set) => ({
         ? { view: { ...state.view, chat: [...state.view.chat, message].slice(-CHAT_HISTORY_LIMIT) } }
         : state,
     ),
+  applyAnnotationUpdate: (by, annotations) =>
+    set((state) => {
+      const view = state.view;
+      const team = view?.seats.find((s) => s.publicId === view.you)?.team;
+      if (!view || !team) return state;
+      const teamMemberIds = view.seats.filter((s) => s.team === team).map((s) => s.publicId);
+      const color = annotationColorFor(teamMemberIds, by);
+      const others = view.annotations.filter((a) => a.color !== color);
+      return { view: { ...view, annotations: [...others, ...annotations] } };
+    }),
 }));

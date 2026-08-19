@@ -34,7 +34,14 @@ function toPublicSpectator(spectator: Spectator): PublicSpectator {
   return publicSpectator;
 }
 
-function toWireAnnotation(annotation: Annotation): WireAnnotation {
+/**
+ * `by` is server-internal (§10); the wire form leaves it off entirely (a
+ * teammate's fixed `color` already identifies who drew it). Exported so
+ * `RoomDO`'s team-scoped `annotation_update` broadcast (T-22) can build the
+ * same wire shape without a second seatId-stripping implementation, mirroring
+ * `toWireProposal` above.
+ */
+export function toWireAnnotation(annotation: Annotation): WireAnnotation {
   const { by: _by, ...wireAnnotation } = annotation;
   return wireAnnotation;
 }

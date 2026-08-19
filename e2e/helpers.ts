@@ -51,6 +51,24 @@ export async function tapSquare(page: Page, square: string): Promise<void> {
   await page.locator(`[data-square="${square}"]`).click();
 }
 
+/**
+ * Right-click-drag (or a plain right-click, when `from === to`) to draw a board annotation
+ * (T-22, `docs/DESIGN.md` §5.9). Unlike piece dragging, `Board.tsx`'s annotation gestures are
+ * driven by ordinary `mousedown`/`mouseup` — no native HTML5 drag-and-drop involved — so
+ * Playwright's own `page.mouse` API (real, hit-tested pointer events) drives this directly,
+ * without `dragPiece`'s `dispatchEvent` workaround.
+ */
+export async function drawAnnotation(page: Page, from: string, to: string): Promise<void> {
+  const fromBox = await page.locator(`[data-square="${from}"]`).boundingBox();
+  const toBox = await page.locator(`[data-square="${to}"]`).boundingBox();
+  if (!fromBox || !toBox) throw new Error(`square "${from}" or "${to}" not found`);
+
+  await page.mouse.move(fromBox.x + fromBox.width / 2, fromBox.y + fromBox.height / 2);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(toBox.x + toBox.width / 2, toBox.y + toBox.height / 2, { steps: 5 });
+  await page.mouse.up({ button: 'right' });
+}
+
 export function legalDots(page: Page): Locator {
   return page.getByTestId('legal-dot');
 }

@@ -13,6 +13,7 @@
 import { startGame as buildInitialGameState } from './gameEngine.js';
 import { DEFAULT_TIME_CONTROL } from './timeControls.js';
 import type {
+  AnnotationColor,
   ChatChannel,
   ChatMessage,
   ErrorCode,
@@ -278,6 +279,21 @@ export function connectedTeamSize(
   team: Team,
 ): number {
   return seats.filter((s) => s.team === team && s.connected).length;
+}
+
+/**
+ * §5.9: "each teammate gets a fixed color ... so you always know who drew
+ * what." The mapping is derived from seat order (first of `team`'s two seats
+ * is `'A'`, the second — if any — is `'B'`) rather than trusted from the
+ * wire, so a client can't spoof its teammate's color. `teamMemberIds` is
+ * whatever identifier space the caller works in — `seatId` server-side
+ * (`RoomDO`, which knows the mover's real identity) or `publicId` client-side
+ * (the redacted view never has `seatId`) — both orderings agree since
+ * `redactFor()` maps `room.seats` to `PublicSeat[]` in place, preserving
+ * position.
+ */
+export function annotationColorFor(teamMemberIds: readonly string[], id: string): AnnotationColor {
+  return teamMemberIds.indexOf(id) === 1 ? 'B' : 'A';
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   MAX_SEATS,
   MAX_SPECTATORS,
   advanceToTeamSelect,
+  annotationColorFor,
   canStartGame,
   connectedTeamSize,
   createRoom,
@@ -386,6 +387,21 @@ describe('connectedTeamSize', () => {
 
   it('is 0 for a team with no occupied seats', () => {
     expect(connectedTeamSize([seat('WHITE', true)], 'BLACK')).toBe(0);
+  });
+});
+
+describe('annotationColorFor', () => {
+  it('assigns the first of the two ids A and the second B', () => {
+    expect(annotationColorFor(['alice', 'bob'], 'alice')).toBe('A');
+    expect(annotationColorFor(['alice', 'bob'], 'bob')).toBe('B');
+  });
+
+  it('is A for a solo team (only one id in the list)', () => {
+    expect(annotationColorFor(['alice'], 'alice')).toBe('A');
+  });
+
+  it('follows list order, not any property of the id itself', () => {
+    expect(annotationColorFor(['bob', 'alice'], 'alice')).toBe('B');
   });
 });
 

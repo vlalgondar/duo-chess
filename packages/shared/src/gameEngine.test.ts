@@ -8,12 +8,13 @@ import {
   proposeMove,
   rejectProposal,
   requiresConfirmation,
+  setAnnotations,
   startGame,
   submitMove,
   withdrawProposal,
 } from './gameEngine.js';
 import { connectedTeamSize } from './roomEngine.js';
-import type { GameState, Square } from './types.js';
+import type { GameState, Square, WireAnnotation } from './types.js';
 
 const TIME_CONTROL = { baseMs: 600_000, incrementMs: 5_000, label: '10+5' };
 const NOW = 1_000;
@@ -504,5 +505,59 @@ describe('requiresConfirmation / submitMove (§4.4 solo teams)', () => {
     if (!result.ok) return;
     expect(result.value.moveHistory).toEqual(['e4']);
     expect(result.value.proposals.WHITE).toBeNull();
+  });
+});
+
+describe('board annotations (§5.9)', () => {
+  const ALICE = 'seat-alice';
+  const BOB = 'seat-bob';
+
+  const circle: WireAnnotation = { kind: 'CIRCLE', from: 'e4', color: 'A' };
+  const arrow: WireAnnotation = { kind: 'ARROW', from: 'd2', to: 'd4', color: 'A' };
+
+  it('stamps the caller-supplied color and author, ignoring the wire payload\'s own color', () => {
+    const game = startGame(TIME_CONTROL);
+    // The wire annotation claims 'B' — the engine must still record 'A', the color the caller
+    // (RoomDO, via roomEngine.annotationColorFor) actually computed for this seat.
+    const spoofed: WireAnnotation = { ...circle, color: 'B' };
+    const result = setAnnotations(game, 'WHITE', ALICE, 'A', [spoofed]);
+    expect(result.annotations.WHITE).toEqual([{ ...circle, by: ALICE, color: 'A' }]);
+  });
+
+  it('is a full replacement of the caller\'s own set, leaving the teammate\'s untouched', () => {
+    const game = startGame(TIME_CONTROL);
+    const withAlice = setAnnotations(game, 'WHITE', ALICE, 'A', [circle, arrow]);
+    const withBob = setAnnotations(withAlice, 'WHITE', BOB, 'B', [{ kind: 'CIRCLE', from: 'g1', color: 'B' }]);
+    expect(withBob.annotations.WHITE).toHaveLength(3);
+
+    const replaced = setAnnotations(withBob, 'WHITE', ALICE, 'A', [circle]);
+    expect(replaced.annotations.WHITE).toEqual([
+      { kind: 'CIRCLE', from: 'g1', color: 'B', by: BOB },
+      { ...circle, by: ALICE },
+    ]);
+  });
+
+  it('an empty array clears the caller\'s own annotations entirely', () => {
+    const game = startGame(TIME_CONTROL);
+    const withAlice = setAnnotations(game, 'WHITE', ALICE, 'A', [circle, arrow]);
+    const cleared = setAnnotations(withAlice, 'WHITE', ALICE, 'A', []);
+    expect(cleared.annotations.WHITE).toEqual([]);
+  });
+
+  it('does not touch the other team\'s annotations', () => {
+    const game = startGame(TIME_CONTROL);
+    const withWhite = setAnnotations(game, 'WHITE', ALICE, 'A', [circle]);
+    const withBlack = setAnnotations(withWhite, 'BLACK', BOB, 'A', [arrow]);
+    expect(withBlack.annotations.WHITE).toEqual([{ ...circle, by: ALICE }]);
+    expect(withBlack.annotations.BLACK).toEqual([{ ...arrow, by: BOB }]);
+  });
+
+  it('clears on the next commit, same as proposals (§4.3 rule 7)', () => {
+    const game = startGame(TIME_CONTROL);
+    const annotated = setAnnotations(game, 'WHITE', ALICE, 'A', [circle]);
+    const committed = commitMove(annotated, { from: 'e2', to: 'e4' }, 'WHITE', NOW, TIME_CONTROL);
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) return;
+    expect(committed.value.annotations).toEqual({ WHITE: [], BLACK: [] });
   });
 });

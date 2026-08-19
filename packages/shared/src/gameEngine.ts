@@ -16,6 +16,8 @@
 import { Chess } from 'chess.js';
 import { advanceClock, startClock } from './clock.js';
 import type {
+  Annotation,
+  AnnotationColor,
   ErrorCode,
   GameState,
   GameStatus,
@@ -25,6 +27,7 @@ import type {
   Square,
   Team,
   TimeControl,
+  WireAnnotation,
 } from './types.js';
 
 export type GameEngineResult<T> = { ok: true; value: T } | { ok: false; code: ErrorCode };
@@ -301,6 +304,33 @@ export function requiresConfirmation(teamSize: number): boolean {
  * teammate's `acceptProposal`; a solo team's move commits immediately,
  * through the exact same `commitMove` every accepted proposal uses.
  */
+/**
+ * §5.9 board annotations: "Full replacement of your own set" — replaces
+ * everything `by` previously drew in `team`'s array, leaving the teammate's
+ * live scribbles (if any) untouched, rather than replacing the whole team
+ * slot the way a proposal does. `color` comes from the caller
+ * (`roomEngine.annotationColorFor`), not the wire payload — a teammate's
+ * drawing color is fixed by seat order, not whatever a client claims.
+ * Unlike every other mutation here, the result is never validated for
+ * legality (annotations aren't moves) and never fails.
+ */
+export function setAnnotations(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  color: AnnotationColor,
+  annotations: readonly WireAnnotation[],
+): GameState {
+  const authored: Annotation[] = annotations.map((a) => ({ ...a, by, color }));
+  return {
+    ...game,
+    annotations: {
+      ...game.annotations,
+      [team]: [...game.annotations[team].filter((a) => a.by !== by), ...authored],
+    },
+  };
+}
+
 export function submitMove(
   game: GameState,
   team: Team,

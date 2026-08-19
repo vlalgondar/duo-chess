@@ -7,6 +7,7 @@ import {
   type RoomSettings,
   type Square,
   type Team,
+  type WireAnnotation,
 } from '@duo/shared';
 import { buildRoomUrl, connectSocket, sendMessage } from './net/socket.js';
 import { BoardScreen } from './screens/BoardScreen.js';
@@ -37,6 +38,7 @@ export function App() {
   const setServerClockOffsetMs = useRoomStore((s) => s.setServerClockOffsetMs);
   const setLastError = useRoomStore((s) => s.setLastError);
   const appendChatMessage = useRoomStore((s) => s.appendChatMessage);
+  const applyAnnotationUpdate = useRoomStore((s) => s.applyAnnotationUpdate);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Mutable, not state: the `onMessage` closure below is created once per
@@ -74,6 +76,8 @@ export function App() {
           setServerClockOffsetMs(parsed.value.serverNow - Date.now());
         } else if (parsed.value.t === 'chat_message') {
           appendChatMessage(parsed.value.message);
+        } else if (parsed.value.t === 'annotation_update') {
+          applyAnnotationUpdate(parsed.value.by, parsed.value.annotations);
         } else if (parsed.value.t === 'error') {
           if (hasJoinedRef.current) {
             setLastError(parsed.value.code);
@@ -128,6 +132,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'chat', text, channel });
   };
 
+  const handleAnnotate = (annotations: WireAnnotation[]) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'annotate', annotations });
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -152,6 +160,7 @@ export function App() {
         onReject={handleReject}
         onWithdraw={handleWithdraw}
         onSendChat={handleSendChat}
+        onAnnotate={handleAnnotate}
         serverClockOffsetMs={serverClockOffsetMs}
       />
     );

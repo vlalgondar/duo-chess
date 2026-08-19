@@ -1,6 +1,7 @@
-import { forwardRef, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { forwardRef, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Chess, type Square } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
+import type { AnnotationColor, WireAnnotation } from '@duo/shared';
 
 // `react-chessboard`'s own prop types (`CustomSquareProps`, its `Square`/`Piece` aliases)
 // aren't re-exported from the package root, only from an internal dist path — so these are
@@ -121,6 +122,24 @@ function makeSquareContent(
   return SquareContent as unknown as (props: SquareContentProps) => ReactNode;
 }
 
+/** §5.9's 200ms long-press threshold — short enough to feel responsive, long enough not to fight piece dragging. */
+const LONG_PRESS_MS = 200;
+
+/** Same gesture (kind + squares), ignoring color/author — the "repeat to erase" toggle key (§5.9). */
+function sameAnnotationShape(a: WireAnnotation, b: WireAnnotation): boolean {
+  return a.kind === b.kind && a.from === b.from && a.to === b.to;
+}
+
+/** The `[data-square]` ancestor of `target`, if any — same attribute `dragPiece`'s e2e helper already relies on. */
+function squareFromTarget(target: EventTarget | null): Square | null {
+  const el = target instanceof Element ? target.closest('[data-square]') : null;
+  return el ? (el.getAttribute('data-square') as Square) : null;
+}
+
+function squareAtPoint(x: number, y: number): Square | null {
+  return squareFromTarget(document.elementFromPoint(x, y));
+}
+
 /** Center of `square`'s cell as a percentage of the board, accounting for orientation. */
 function squareCenterPercent(square: Square, orientation: 'white' | 'black'): { x: number; y: number } {
   const file = square.charCodeAt(0) - 'a'.charCodeAt(0); // 0-7, a=0
@@ -153,6 +172,23 @@ interface BoardProps {
   locked?: boolean;
   /** T-20: the viewer's own team's live proposal, rendered as a ghost piece + arrow (§5.5). */
   proposal?: ProposalOverlay | null;
+  /**
+   * T-22: the viewer's own team's full annotation set as last confirmed by the server (both
+   * teammates', §5.9) — `view.annotations`. Board renders the *teammate's* entries from this
+   * prop and its own freshly-drawn ones from local state (see `ownAnnotationColor`), so nothing
+   * has to wait for a server round trip to appear on the drawer's own screen.
+   */
+  annotations?: readonly WireAnnotation[];
+  /**
+   * T-22: this viewer's fixed drawing color (`roomEngine.annotationColorFor`) — presence of this
+   * prop is what turns annotation drawing on at all (omitted entirely by the local sandbox and by
+   * spectators/unassigned seats, who have no team to draw for).
+   */
+  ownAnnotationColor?: AnnotationColor | undefined;
+  /** T-22: hex colors for the two possible drawers, distinct from `proposal`'s team accent (§5.9). */
+  annotationColors?: Record<AnnotationColor, string> | undefined;
+  /** T-22: fires (debounced 80ms) with the viewer's own full set whenever it changes locally — the caller sends it as `annotate`. */
+  onAnnotationsChange?: (annotations: WireAnnotation[]) => void;
 }
 
 function createGame(fen: string): Chess {
@@ -183,6 +219,10 @@ export function Board({
   onMove,
   locked = false,
   proposal = null,
+  annotations,
+  ownAnnotationColor,
+  annotationColors,
+  onAnnotationsChange,
 }: BoardProps) {
   const networked = serverFen !== undefined;
   const gameRef = useRef(createGame(serverFen ?? initialFen));
@@ -199,6 +239,106 @@ export function Board({
   const [selected, setSelected] = useState<Square | null>(null);
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+
+  // T-22 board annotations (§5.9). `annotationsEnabled` is false for the local sandbox and for
+  // spectators/unassigned seats — neither has a color to draw with.
+  const annotationsEnabled = ownAnnotationColor !== undefined;
+  const [ownAnnotations, setOwnAnnotations] = useState<WireAnnotation[]>([]);
+
+  // "Cleared automatically on every commit" (§5.9) — the position changing is exactly what a
+  // commit *is*, so resetting on a `fen` change (the same render-time resync pattern the
+  // networked `gameRef` above already uses) needs no separate signal from the server.
+  const prevAnnotationFenRef = useRef(fen);
+  if (fen !== prevAnnotationFenRef.current) {
+    prevAnnotationFenRef.current = fen;
+    if (ownAnnotations.length > 0) setOwnAnnotations([]);
+  }
+
+  // A ref, not a dependency, so a parent re-render (which recreates this callback on every
+  // render, same as every other handler `App.tsx` passes down) can't reset the debounce timer.
+  const onAnnotationsChangeRef = useRef(onAnnotationsChange);
+  onAnnotationsChangeRef.current = onAnnotationsChange;
+  useEffect(() => {
+    if (!annotationsEnabled) return;
+    // §5.9: "Full replacement of your own set ... debounced at 80ms."
+    const timer = setTimeout(() => onAnnotationsChangeRef.current?.(ownAnnotations), 80);
+    return () => clearTimeout(timer);
+  }, [ownAnnotations, annotationsEnabled]);
+
+  function toggleOwnAnnotation(next: WireAnnotation) {
+    setOwnAnnotations((prev) =>
+      prev.some((a) => sameAnnotationShape(a, next))
+        ? prev.filter((a) => !sameAnnotationShape(a, next))
+        : [...prev, next],
+    );
+  }
+
+  const rightClickDownRef = useRef<Square | null>(null);
+
+  function handleBoardContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+  }
+
+  function handleBoardMouseDown(e: React.MouseEvent) {
+    if (!annotationsEnabled || e.button !== 2) return;
+    rightClickDownRef.current = squareFromTarget(e.target);
+  }
+
+  function handleBoardMouseUp(e: React.MouseEvent) {
+    if (!annotationsEnabled || e.button !== 2 || !ownAnnotationColor) return;
+    const from = rightClickDownRef.current;
+    rightClickDownRef.current = null;
+    const to = squareFromTarget(e.target);
+    if (!from || !to) return;
+    toggleOwnAnnotation(
+      from === to
+        ? { kind: 'CIRCLE', from, color: ownAnnotationColor }
+        : { kind: 'ARROW', from, to, color: ownAnnotationColor },
+    );
+  }
+
+  // Touch equivalent (§5.9): long-press-tap for a circle, long-press-and-drag for an arrow.
+  // `LONG_PRESS_MS` keeps a quick tap free to mean what it already means elsewhere (tap-tap
+  // movement, T-12) rather than starting to draw.
+  const touchAnnotateRef = useRef<{ square: Square; longPress: boolean } | null>(null);
+  const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (touchTimerRef.current) clearTimeout(touchTimerRef.current); }, []);
+
+  function handleBoardTouchStart(e: React.TouchEvent) {
+    if (!annotationsEnabled) return;
+    const touch = e.touches[0];
+    const square = touch ? squareAtPoint(touch.clientX, touch.clientY) : null;
+    if (!square) return;
+    const state = { square, longPress: false };
+    touchAnnotateRef.current = state;
+    if (touchTimerRef.current) clearTimeout(touchTimerRef.current);
+    touchTimerRef.current = setTimeout(() => {
+      state.longPress = true;
+    }, LONG_PRESS_MS);
+  }
+
+  function handleBoardTouchEnd(e: React.TouchEvent) {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current);
+      touchTimerRef.current = null;
+    }
+    const state = touchAnnotateRef.current;
+    touchAnnotateRef.current = null;
+    if (!state?.longPress || !ownAnnotationColor) return;
+    const touch = e.changedTouches[0];
+    const endSquare = (touch && squareAtPoint(touch.clientX, touch.clientY)) ?? state.square;
+    toggleOwnAnnotation(
+      endSquare === state.square
+        ? { kind: 'CIRCLE', from: state.square, color: ownAnnotationColor }
+        : { kind: 'ARROW', from: state.square, to: endSquare, color: ownAnnotationColor },
+    );
+  }
+
+  const teammateAnnotations = useMemo(
+    () => (annotations ?? []).filter((a) => a.color !== ownAnnotationColor),
+    [annotations, ownAnnotationColor],
+  );
+  const renderedAnnotations = annotationsEnabled ? [...teammateAnnotations, ...ownAnnotations] : [];
 
   const legalMoves = useMemo(
     () => (selected ? game.moves({ square: selected, verbose: true }) : []),
@@ -285,6 +425,9 @@ export function Board({
   }
 
   function handleSquareClick(square: string, piece: string | undefined) {
+    // §5.9: "Left-click anywhere on the board clears all your own annotations" — independent of
+    // `locked`/`pendingPromotion`, since it's not a move attempt.
+    if (annotationsEnabled && ownAnnotations.length > 0) setOwnAnnotations([]);
     if (pendingPromotion || locked) return;
     const clicked = square as Square;
     if (selected && (dotSquares.has(clicked) || ringSquares.has(clicked))) {
@@ -300,7 +443,15 @@ export function Board({
   }
 
   return (
-    <div data-testid="board" className={`relative ${sizeClassName}`}>
+    <div
+      data-testid="board"
+      className={`relative ${sizeClassName}`}
+      onContextMenu={handleBoardContextMenu}
+      onMouseDown={handleBoardMouseDown}
+      onMouseUp={handleBoardMouseUp}
+      onTouchStart={handleBoardTouchStart}
+      onTouchEnd={handleBoardTouchEnd}
+    >
       {/* Test-only accessor, same spirit as the harness's `debugState()` — lets e2e specs
           assert on the authoritative FEN instead of reverse-engineering it from piece markup. */}
       <span data-testid="fen" className="sr-only">
@@ -315,7 +466,66 @@ export function Board({
         customSquare={SquareContent}
         customSquareStyles={customSquareStyles}
         arePiecesDraggable={!locked}
+        // The library's own right-click-drag arrow feature is superseded by our own overlay
+        // below (per-annotation colors, plus circles, which it has no concept of) — disabled so
+        // it never renders a second, undifferentiated arrow underneath ours.
+        areArrowsAllowed={false}
       />
+
+      {/* §5.9: teammate-only scribbles, `pointer-events: none` so they never intercept a click
+          or drag through an annotated square — see the mouse/touch handlers above for drawing. */}
+      {renderedAnnotations.length > 0 && (
+        <svg
+          data-testid="annotation-overlay"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="pointer-events-none absolute inset-0 z-10"
+        >
+          {renderedAnnotations.map((a, i) => {
+            const color = annotationColors?.[a.color] ?? 'currentColor';
+            const from = squareCenterPercent(a.from, orientation);
+            // `to` presence (not just `kind`) is what TS can actually narrow on here — `Annotation`/
+            // `WireAnnotation` are one flat type with an optional `to`, not a discriminated union.
+            if (a.kind === 'ARROW' && a.to !== undefined) {
+              const to = squareCenterPercent(a.to, orientation);
+              const markerId = `annotation-arrowhead-${i}`;
+              return (
+                <g key={`arrow-${a.from}-${a.to}-${a.color}`} data-testid="annotation-arrow">
+                  <defs>
+                    <marker id={markerId} markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto">
+                      <path d="M0,0 L4,2 L0,4 Z" fill={color} />
+                    </marker>
+                  </defs>
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={to.x}
+                    y2={to.y}
+                    stroke={color}
+                    strokeWidth={1.4}
+                    strokeLinecap="round"
+                    opacity={0.85}
+                    markerEnd={`url(#${markerId})`}
+                  />
+                </g>
+              );
+            }
+            return (
+              <circle
+                key={`circle-${a.from}-${a.color}`}
+                data-testid="annotation-circle"
+                cx={from.x}
+                cy={from.y}
+                r={5.2}
+                fill="none"
+                stroke={color}
+                strokeWidth={1.4}
+                opacity={0.85}
+              />
+            );
+          })}
+        </svg>
+      )}
 
       {arrow && (
         <svg

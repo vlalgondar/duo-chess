@@ -1,10 +1,13 @@
 import {
+  annotationColorFor,
   connectedTeamSize,
   requiresConfirmation,
+  type AnnotationColor,
   type ChatChannel,
   type ClientRoomView,
   type PromotionPiece,
   type Square,
+  type WireAnnotation,
 } from '@duo/shared';
 import { Board, type ProposalOverlay } from '../components/Board.js';
 import { BottomSheet } from '../components/BottomSheet.js';
@@ -19,12 +22,22 @@ interface GameScreenProps {
   onReject: (proposalId: string) => void;
   onWithdraw: (proposalId: string) => void;
   onSendChat: (text: string, channel: ChatChannel) => void;
+  onAnnotate: (annotations: WireAnnotation[]) => void;
   serverClockOffsetMs: number;
 }
 
 // docs/DESIGN.md §5.9's "team's accent color" — one color per team (not per teammate; that
 // distinction is T-22's annotation colors), used for both the proposal ghost piece and arrow.
 const TEAM_ACCENT: Record<'WHITE' | 'BLACK', string> = { WHITE: '#38bdf8', BLACK: '#c084fc' };
+
+// §5.9: "each teammate gets a fixed color (Team 1: amber/cyan, Team 2: violet/lime)" — keyed by
+// which chess side you're on (this data model has no separate Team 1/Team 2, per T-17's own
+// judgment call), and deliberately distinct from `TEAM_ACCENT` above so a scribble is never
+// mistaken for the live proposal.
+const ANNOTATION_COLORS: Record<'WHITE' | 'BLACK', Record<AnnotationColor, string>> = {
+  WHITE: { A: '#fbbf24', B: '#22d3ee' }, // amber-400 / cyan-400
+  BLACK: { A: '#8b5cf6', B: '#a3e635' }, // violet-500 / lime-400
+};
 
 // Same §5.10 formula BoardScreen's sandbox uses — see that file's comment for why the 220px
 // deduction exists (bottom-sheet peeked height + flip-button headroom below 900px).
@@ -46,6 +59,7 @@ export function GameScreen({
   onReject,
   onWithdraw,
   onSendChat,
+  onAnnotate,
   serverClockOffsetMs,
 }: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
@@ -82,6 +96,15 @@ export function GameScreen({
     proposal && yourTeam
       ? { from: proposal.from, to: proposal.to, promotion: proposal.promotion, accentColor: TEAM_ACCENT[yourTeam] }
       : null;
+
+  // T-22: undefined for a spectator/unassigned seat — no team to draw for, which is what turns
+  // annotation drawing off in `Board` entirely.
+  const ownAnnotationColor = yourTeam
+    ? annotationColorFor(
+        view.seats.filter((s) => s.team === yourTeam).map((s) => s.publicId),
+        view.you,
+      )
+    : undefined;
 
   const statusText =
     game.status === 'ACTIVE'
@@ -133,6 +156,10 @@ export function GameScreen({
           onMove={locked ? undefined : onMove}
           locked={locked}
           proposal={boardProposal}
+          annotations={view.annotations}
+          ownAnnotationColor={ownAnnotationColor}
+          annotationColors={yourTeam ? ANNOTATION_COLORS[yourTeam] : undefined}
+          onAnnotationsChange={onAnnotate}
           sizeClassName={BOARD_SIZE_CLASSNAME}
         />
         {showClocks && (
