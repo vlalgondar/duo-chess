@@ -20,9 +20,11 @@ export function App() {
   const status = useRoomStore((s) => s.status);
   const view = useRoomStore((s) => s.view);
   const joinError = useRoomStore((s) => s.joinError);
+  const serverClockOffsetMs = useRoomStore((s) => s.serverClockOffsetMs);
   const setStatus = useRoomStore((s) => s.setStatus);
   const setView = useRoomStore((s) => s.setView);
   const setJoinError = useRoomStore((s) => s.setJoinError);
+  const setServerClockOffsetMs = useRoomStore((s) => s.setServerClockOffsetMs);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -48,6 +50,8 @@ export function App() {
 
         if (parsed.value.t === 'state') {
           setView(parsed.value);
+        } else if (parsed.value.t === 'clock_sync') {
+          setServerClockOffsetMs(parsed.value.serverNow - Date.now());
         } else if (parsed.value.t === 'error') {
           setJoinError(parsed.value.message);
           setStatus('closed');
@@ -86,7 +90,7 @@ export function App() {
   }
 
   if (view.phase === 'IN_GAME') {
-    return <GameScreen view={view} onMove={handleMove} />;
+    return <GameScreen view={view} onMove={handleMove} serverClockOffsetMs={serverClockOffsetMs} />;
   }
 
   return <Lobby view={view} onStart={handleStart} onUpdateSettings={handleUpdateSettings} />;

@@ -2,13 +2,17 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   commitMove,
   createRoom,
+  flagFallDeadline,
   joinRoom,
   parseClientMessage,
   redactFor,
+  remainingMs,
+  resolveTimeout,
   setConnected,
   startOneVOneGame,
   type ClientRoomView,
   type ErrorCode,
+  type GameState,
   type GameStatus,
   type PromotionPiece,
   type Room,
@@ -17,6 +21,9 @@ import {
   type Square,
   type Team,
 } from '@duo/shared';
+
+/** §8/§7: "clock_sync ... Every ~5s and on every commit." */
+const CLOCK_SYNC_INTERVAL_MS = 5_000;
 
 const GAME_OVER_REASON: Record<GameStatus, string> = {
   ACTIVE: 'active',
@@ -70,6 +77,14 @@ export class RoomDO extends DurableObject {
   private room: Room | null = null;
   private resumeTokens: Record<string, string> = {};
   private seq = 0;
+  /**
+   * Next `clock_sync` broadcast time — deliberately not persisted. Unlike
+   * flag-fall, a missed periodic sync after an eviction is harmless (§9: the
+   * client already resyncs from the authoritative `clock` on every `state`),
+   * so it's cheaper to just re-derive "5s from now" than to carry another
+   * field through storage for it.
+   */
+  private nextClockSyncAt: number | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -77,6 +92,10 @@ export class RoomDO extends DurableObject {
       this.room = (await ctx.storage.get<Room>(ROOM_STORAGE_KEY)) ?? null;
       this.resumeTokens = (await ctx.storage.get<Record<string, string>>(RESUME_TOKENS_STORAGE_KEY)) ?? {};
       this.seq = (await ctx.storage.get<number>(SEQ_STORAGE_KEY)) ?? 0;
+      // §9 "Alarm survival": re-derive and re-set the alarm from stored state
+      // on every rehydration, belt-and-braces — an eviction must never lose a
+      // pending flag-fall.
+      await this.scheduleAlarm();
     });
   }
 
@@ -152,6 +171,8 @@ export class RoomDO extends DurableObject {
     this.room = result.value;
     await this.persist();
     await this.broadcastState();
+    this.broadcastClockSync();
+    await this.scheduleAlarm();
   }
 
   /**
@@ -201,6 +222,11 @@ export class RoomDO extends DurableObject {
       by: seat!.publicId,
     });
     await this.broadcastState();
+    // §7/§8: "clock_sync ... Every ~5s and on every commit" — reset the
+    // periodic timer here too, so a sync that just went out on commit isn't
+    // immediately duplicated by the alarm a few seconds later.
+    this.nextClockSyncAt = Date.now() + CLOCK_SYNC_INTERVAL_MS;
+    this.broadcastClockSync();
 
     if (result.value.status !== 'ACTIVE') {
       this.broadcastAll({
@@ -210,6 +236,111 @@ export class RoomDO extends DurableObject {
         reason: GAME_OVER_REASON[result.value.status],
       });
     }
+
+    // Rescheduled per commit (CLAUDE.md rule 4's single-slot deadline queue):
+    // whichever of flag-fall or the next periodic sync is soonest wins the
+    // DO's one alarm slot.
+    await this.scheduleAlarm();
+  }
+
+  /**
+   * Fires when the earliest deadline in the queue (flag-fall or the next
+   * periodic `clock_sync`) is reached. There is exactly one alarm slot per
+   * object (CLAUDE.md rule 4), so this always re-derives and re-arms the
+   * alarm for whatever is next before returning, whether or not it did
+   * anything this time — `scheduleAlarm` is the only place that calls
+   * `ctx.storage.setAlarm()`.
+   */
+  override async alarm(): Promise<void> {
+    const now = Date.now();
+    const game = this.room?.game;
+
+    if (game && game.status === 'ACTIVE') {
+      const deadline = flagFallDeadline(game.clock, game.sideToMove, this.room!.settings.timeControl);
+      if (deadline !== null && now >= deadline) {
+        await this.resolveFlagFall(game, game.sideToMove, now);
+      }
+    }
+
+    const activeGame = this.room?.game;
+    if (
+      this.room?.phase === 'IN_GAME' &&
+      activeGame?.status === 'ACTIVE' &&
+      this.nextClockSyncAt !== undefined &&
+      now >= this.nextClockSyncAt
+    ) {
+      this.broadcastClockSync(now);
+      this.nextClockSyncAt = now + CLOCK_SYNC_INTERVAL_MS;
+    }
+
+    await this.scheduleAlarm(now);
+  }
+
+  /**
+   * Ends the game on time (§4.1 "Timeout" row) — a loss for `flaggedTeam`, or
+   * a draw if the opponent can't mate. Freezes `clock` to each team's true
+   * live remaining time at `now` (via `remainingMs`, the same arithmetic
+   * `flagFallDeadline` is built on) rather than just stopping it in place —
+   * without this the flagged team's stored `*Ms` is still whatever it was
+   * when their turn started, so a client would show them well above zero on
+   * a game the server just ended for running out of time.
+   */
+  private async resolveFlagFall(game: GameState, flaggedTeam: Team, now: number): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game) return;
+
+    const { status, winner } = resolveTimeout(game.fen, flaggedTeam);
+    const clock = {
+      whiteMs: remainingMs(game.clock, 'WHITE', game.sideToMove, now),
+      blackMs: remainingMs(game.clock, 'BLACK', game.sideToMove, now),
+      turnStartedAt: null,
+      running: false,
+    };
+    this.room = { ...room, game: { ...game, status, winner, clock } };
+    await this.persist();
+    await this.broadcastState();
+    this.broadcastAll({ t: 'game_over', status, winner, reason: GAME_OVER_REASON[status] });
+  }
+
+  /** `{ whiteMs, blackMs, turnStartedAt, serverNow }` — the client's rAF interpolation resyncs against this (§8.6). */
+  private broadcastClockSync(now = Date.now()): void {
+    const game = this.room?.game;
+    if (!game) return;
+    this.broadcastAll({
+      t: 'clock_sync',
+      whiteMs: game.clock.whiteMs,
+      blackMs: game.clock.blackMs,
+      turnStartedAt: game.clock.turnStartedAt,
+      serverNow: now,
+    });
+  }
+
+  /**
+   * Recomputes the single alarm slot from the current deadline queue —
+   * flag-fall (if a clock is running) and the next periodic `clock_sync` (if
+   * a game is in progress) — and arms `ctx.storage.setAlarm()` for whichever
+   * is soonest. The only place that calls `setAlarm`/`deleteAlarm`, so every
+   * caller (join/rehydrate, start_game, propose, the alarm handler itself)
+   * routes through here rather than poking the alarm directly.
+   */
+  private async scheduleAlarm(now = Date.now()): Promise<void> {
+    const room = this.room;
+    const game = room?.game;
+    if (!room || !game || room.phase !== 'IN_GAME' || game.status !== 'ACTIVE') {
+      this.nextClockSyncAt = undefined;
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    if (this.nextClockSyncAt === undefined) {
+      this.nextClockSyncAt = now + CLOCK_SYNC_INTERVAL_MS;
+    }
+
+    const deadlines = [this.nextClockSyncAt];
+    const flagFall = flagFallDeadline(game.clock, game.sideToMove, room.settings.timeControl);
+    if (flagFall !== null) deadlines.push(flagFall);
+
+    await this.ctx.storage.setAlarm(Math.min(...deadlines));
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
@@ -325,5 +456,19 @@ export class RoomDO extends DurableObject {
    */
   debugState(): { socketCount: number; room: Room | null } {
     return { socketCount: this.ctx.getWebSockets().length, room: this.room };
+  }
+
+  /**
+   * Test-only settings override, called via `runInDurableObject` — never
+   * reachable over the wire (same precedent as `debugState()`). `T-16`'s own
+   * harness tests need a short/fast time control to exercise flag-fall
+   * without a real multi-minute wait; `update_settings` isn't wired to the
+   * wire protocol until T-17 (see TASKS.md Findings), so this is the only
+   * way to configure one pre-game.
+   */
+  async debugSetTimeControl(timeControl: Room['settings']['timeControl']): Promise<void> {
+    if (!this.room) return;
+    this.room = { ...this.room, settings: { ...this.room.settings, timeControl } };
+    await this.persist();
   }
 }

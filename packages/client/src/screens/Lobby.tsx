@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ClientRoomView, RoomSettings } from '@duo/shared';
+import { TIME_CONTROLS, type ClientRoomView, type RoomSettings } from '@duo/shared';
 
 // docs/DESIGN.md §5.3 gates Start on "every player has picked a team", but
 // team assignment happens on the later Team Select screen (§5.4) per the
@@ -102,11 +102,11 @@ function CopyLinkButton({ link }: { link: string }) {
 }
 
 /**
- * `timeControl` is deliberately read-only here — the full 10-option picker
- * (§1.1) is T-16's job. `allowSpectators`/`randomizeColors`/`disconnectGraceMs`
- * have no later task claiming them, so they're wired live. The server doesn't
- * yet handle `update_settings` (T-09's Findings; lands at T-17 alongside
- * `set_team`), so a host edit here is a no-op until then.
+ * `timeControl` is now a live picker over the full §4.6 option list (T-16),
+ * same pattern as `allowSpectators`/`randomizeColors`/`disconnectGraceMs`
+ * below: the server doesn't yet handle `update_settings` (T-09's Findings;
+ * lands at T-17 alongside `set_team`), so a host's edit here is a no-op
+ * until then, exactly as harmless as the existing three fields.
  */
 function HostSettings({
   settings,
@@ -117,7 +117,24 @@ function HostSettings({
 }) {
   return (
     <section data-testid="host-settings" className="flex w-64 flex-col gap-3 rounded bg-slate-900 p-4 text-sm">
-      <p className="text-slate-400">Time control: {settings.timeControl.label}</p>
+      <label className="flex items-center justify-between gap-2">
+        Time control
+        <select
+          data-testid="time-control-select"
+          value={settings.timeControl.label}
+          onChange={(event) => {
+            const timeControl = TIME_CONTROLS.find((tc) => tc.label === event.target.value);
+            if (timeControl) onChange({ ...settings, timeControl });
+          }}
+          className="rounded bg-slate-800 px-2 py-1"
+        >
+          {TIME_CONTROLS.map((tc) => (
+            <option key={tc.label} value={tc.label}>
+              {tc.label}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <label className="flex items-center justify-between gap-2">
         Allow spectators

@@ -1,9 +1,11 @@
 import type { ClientRoomView, PromotionPiece, Square } from '@duo/shared';
 import { Board } from '../components/Board.js';
+import { Clock } from '../components/Clock.js';
 
 interface GameScreenProps {
   view: ClientRoomView;
   onMove: (from: Square, to: Square, promotion?: PromotionPiece) => void;
+  serverClockOffsetMs: number;
 }
 
 /**
@@ -13,7 +15,7 @@ interface GameScreenProps {
  * propose/accept UI (ghost piece, arrow, team panel) is T-20's job — this screen is deliberately
  * plain, since with `startOneVOneGame` every team is solo and every legal propose auto-commits.
  */
-export function GameScreen({ view, onMove }: GameScreenProps) {
+export function GameScreen({ view, onMove, serverClockOffsetMs }: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const orientation = you?.team === 'BLACK' ? 'black' : 'white';
   const game = view.game;
@@ -33,6 +35,11 @@ export function GameScreen({ view, onMove }: GameScreenProps) {
         : "Opponent's move"
       : `Game over — ${game.status}${game.winner ? ` (${game.winner} wins)` : ''}`;
 
+  // §4.6: `baseMs: 0` is "Unlimited — no clock" — nothing to show or interpolate.
+  const showClocks = view.settings.timeControl.baseMs > 0;
+  const top = orientation === 'white' ? 'BLACK' : 'WHITE';
+  const bottom = orientation === 'white' ? 'WHITE' : 'BLACK';
+
   return (
     <main
       data-testid="game-shell"
@@ -41,12 +48,30 @@ export function GameScreen({ view, onMove }: GameScreenProps) {
       <p data-testid="game-status" className="text-sm text-slate-400">
         {statusText}
       </p>
+      {showClocks && (
+        <Clock
+          clock={game.clock}
+          team={top}
+          sideToMove={game.sideToMove}
+          serverClockOffsetMs={serverClockOffsetMs}
+          active={game.status === 'ACTIVE' && game.sideToMove === top}
+        />
+      )}
       <Board
         serverFen={game.fen}
         orientation={orientation}
         onMove={game.status === 'ACTIVE' ? onMove : undefined}
         sizeClassName="mx-auto w-full max-w-[560px]"
       />
+      {showClocks && (
+        <Clock
+          clock={game.clock}
+          team={bottom}
+          sideToMove={game.sideToMove}
+          serverClockOffsetMs={serverClockOffsetMs}
+          active={game.status === 'ACTIVE' && game.sideToMove === bottom}
+        />
+      )}
     </main>
   );
 }

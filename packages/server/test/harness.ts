@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { exports } from 'cloudflare:workers';
-import type { Room } from '@duo/shared';
+import type { Room, TimeControl } from '@duo/shared';
 import type { RoomDO } from '../src/worker.js';
 
 export const DEFAULT_ORIGIN = 'http://localhost:5173';
@@ -159,6 +159,11 @@ export class TestRoom {
   /** Fires the room's pending alarm immediately, regardless of its deadline. Returns whether one ran. */
   async advanceTo(_deadline?: number): Promise<boolean> {
     return runDurableObjectAlarm(this.stub);
+  }
+
+  /** Test-only settings override — see `RoomDO.debugSetTimeControl`'s doc comment for why this exists. */
+  async setTimeControl(timeControl: TimeControl): Promise<void> {
+    await runInDurableObject(this.stub, (instance) => instance.debugSetTimeControl(timeControl));
   }
 
   /**

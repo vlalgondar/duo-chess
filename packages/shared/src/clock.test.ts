@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advanceClock, isFlagged, remainingMs, resolveTimeout, startClock } from './clock.js';
+import { advanceClock, flagFallDeadline, isFlagged, remainingMs, resolveTimeout, startClock } from './clock.js';
 import type { ClockState, TimeControl } from './types.js';
 
 const TIME_CONTROL: TimeControl = { baseMs: 600_000, incrementMs: 5_000, label: '10+5' };
@@ -77,6 +77,16 @@ describe('remainingMs / isFlagged', () => {
     const clock = startClock(UNLIMITED);
     expect(remainingMs(clock, 'WHITE', 'WHITE', NOW + 3_600_000)).toBe(0);
     expect(isFlagged(clock, 'WHITE', 'WHITE', NOW + 3_600_000, UNLIMITED)).toBe(false);
+  });
+});
+
+describe('flagFallDeadline', () => {
+  it.each([
+    ['running clock: deadline is turnStartedAt + the mover\'s stored remaining time', { whiteMs: 60_000, blackMs: 90_000, turnStartedAt: NOW, running: true } as ClockState, 'WHITE', TIME_CONTROL, NOW + 60_000],
+    ['idle clock (not yet running)', { whiteMs: 60_000, blackMs: 60_000, turnStartedAt: null, running: false } as ClockState, 'WHITE', TIME_CONTROL, null],
+    ['unlimited mode never has a deadline, even if somehow marked running', { whiteMs: 0, blackMs: 0, turnStartedAt: NOW, running: true } as ClockState, 'WHITE', UNLIMITED, null],
+  ] as const)('%s', (_label, clock, sideToMove, timeControl, expected) => {
+    expect(flagFallDeadline(clock, sideToMove, timeControl)).toBe(expected);
   });
 });
 

@@ -78,6 +78,20 @@ export function isFlagged(clock: ClockState, team: Team, sideToMove: Team, now: 
 }
 
 /**
+ * The server-monotonic timestamp at which `sideToMove`'s clock will hit
+ * zero, or `null` if no flag-fall is currently pending (clock not running,
+ * or unlimited mode). This is what the Durable Object schedules its alarm
+ * against (T-16) — the single source of truth for "when does this team run
+ * out of time," kept here rather than in `RoomDO.ts` so it's covered by the
+ * same pure, `now`-free unit tests as the rest of this module (rule 1).
+ */
+export function flagFallDeadline(clock: ClockState, sideToMove: Team, timeControl: TimeControl): number | null {
+  if (isUnlimited(timeControl) || !clock.running || clock.turnStartedAt === null) return null;
+  const stored = sideToMove === 'WHITE' ? clock.whiteMs : clock.blackMs;
+  return clock.turnStartedAt + stored;
+}
+
+/**
  * Resolves a flag-fall (§4.1 "Timeout" row): loss for `flaggedTeam` unless
  * the opponent has insufficient mating material, in which case it's a draw.
  * `chess.isInsufficientMaterial()` is a whole-board check, which is exactly

@@ -5,6 +5,7 @@ export * from './roomEngine.js';
 export * from './redactFor.js';
 export * from './gameEngine.js';
 export * from './clock.js';
+export * from './timeControls.js';
 
 export const PACKAGE_NAME = '@duo/shared';
 

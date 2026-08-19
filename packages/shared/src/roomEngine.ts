@@ -12,6 +12,7 @@
  * own doc comment for why it doesn't reuse `canStartGame`.
  */
 import { startGame as buildInitialGameState } from './gameEngine.js';
+import { DEFAULT_TIME_CONTROL } from './timeControls.js';
 import type { ErrorCode, Room, RoomCode, RoomSettings, Seat, SeatId, Spectator, Team } from './types.js';
 
 export const MAX_SEATS = 4;
@@ -29,7 +30,7 @@ function fail<T>(code: ErrorCode): RoomEngineResult<T> {
 }
 
 export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
-  timeControl: { baseMs: 600_000, incrementMs: 5_000, label: '10+5' },
+  timeControl: DEFAULT_TIME_CONTROL,
   randomizeColors: false,
   allowSpectators: true,
   disconnectGraceMs: 90_000,
