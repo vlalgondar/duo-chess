@@ -4,6 +4,7 @@ import { checkGameEnd, commitMove, legalMoves, startGame } from './gameEngine.js
 import type { GameState, Square } from './types.js';
 
 const TIME_CONTROL = { baseMs: 600_000, incrementMs: 5_000, label: '10+5' };
+const NOW = 1_000;
 
 /** Recursive node count via `legalMoves`, so perft exercises this module's own move generation. */
 function perft(fen: string, depth: number): number {
@@ -67,7 +68,7 @@ describe('promotion with capture', () => {
   it('promotes and captures in the same move', () => {
     const startFen = 'n1n1k3/1P6/8/8/8/8/8/4K3 w - - 0 1';
     const game = startGame(TIME_CONTROL);
-    const result = commitMove(game, { from: 'b7', to: 'a8', promotion: 'q' }, 'WHITE', startFen);
+    const result = commitMove(game, { from: 'b7', to: 'a8', promotion: 'q' }, 'WHITE', NOW, TIME_CONTROL, startFen);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.moveHistory).toEqual(['bxa8=Q']);
@@ -104,7 +105,7 @@ describe('checkGameEnd', () => {
     ];
     for (const [from, to] of moves) {
       const mover = game.sideToMove;
-      const result = commitMove(game, { from, to }, mover);
+      const result = commitMove(game, { from, to }, mover, NOW, TIME_CONTROL);
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error('setup move rejected');
       game = result.value;
@@ -138,7 +139,7 @@ describe('checkGameEnd', () => {
     ];
     for (const [from, to] of shuffle) {
       const mover = game.sideToMove;
-      const result = commitMove(game, { from, to }, mover);
+      const result = commitMove(game, { from, to }, mover, NOW, TIME_CONTROL);
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error('setup move rejected');
       game = result.value;
@@ -155,19 +156,69 @@ describe('checkGameEnd', () => {
 describe('commitMove', () => {
   it('rejects a move once the game has ended', () => {
     const stalemated: GameState = { ...startGame(TIME_CONTROL), status: 'STALEMATE' };
-    const result = commitMove(stalemated, { from: 'e2', to: 'e4' }, 'WHITE');
+    const result = commitMove(stalemated, { from: 'e2', to: 'e4' }, 'WHITE', NOW, TIME_CONTROL);
     expect(result).toEqual({ ok: false, code: 'ILLEGAL_MOVE' });
   });
 
   it('rejects a move made out of turn', () => {
     const game = startGame(TIME_CONTROL);
-    const result = commitMove(game, { from: 'e7', to: 'e5' }, 'BLACK');
+    const result = commitMove(game, { from: 'e7', to: 'e5' }, 'BLACK', NOW, TIME_CONTROL);
     expect(result).toEqual({ ok: false, code: 'NOT_YOUR_TURN' });
   });
 
   it('rejects an illegal move', () => {
     const game = startGame(TIME_CONTROL);
-    const result = commitMove(game, { from: 'e2', to: 'e5' }, 'WHITE');
+    const result = commitMove(game, { from: 'e2', to: 'e5' }, 'WHITE', NOW, TIME_CONTROL);
     expect(result).toEqual({ ok: false, code: 'ILLEGAL_MOVE' });
+  });
+
+  it('deducts elapsed time from the mover, credits the increment, and starts the opponent ticking', () => {
+    const game = startGame(TIME_CONTROL);
+    const elapsed = 12_345;
+    const result = commitMove(game, { from: 'e2', to: 'e4' }, 'WHITE', NOW + elapsed, TIME_CONTROL);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // White's clock wasn't running yet (idle until White's first commit), so
+    // none of `elapsed` is deducted — only the increment applies.
+    expect(result.value.clock).toEqual({
+      whiteMs: TIME_CONTROL.baseMs + TIME_CONTROL.incrementMs,
+      blackMs: TIME_CONTROL.baseMs,
+      turnStartedAt: NOW + elapsed,
+      running: true,
+    });
+  });
+
+  it('stops the clock once a move ends the game', () => {
+    // Fool's Mate: the fastest possible checkmate, so the clock shouldn't
+    // keep running for black's now-nonexistent next turn.
+    const moves: Array<[Square, Square]> = [
+      ['f2', 'f3'],
+      ['e7', 'e5'],
+      ['g2', 'g4'],
+    ];
+    let game = startGame(TIME_CONTROL);
+    let now = NOW;
+    for (const [from, to] of moves) {
+      const mover = game.sideToMove;
+      const result = commitMove(game, { from, to }, mover, now, TIME_CONTROL);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('setup move rejected');
+      game = result.value;
+      now += 1_000;
+    }
+    const result = commitMove(game, { from: 'd8', to: 'h4' }, 'BLACK', now, TIME_CONTROL);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.status).toBe('CHECKMATE');
+    expect(result.value.clock.running).toBe(false);
+  });
+
+  it('never advances the clock in unlimited mode', () => {
+    const unlimited = { baseMs: 0, incrementMs: 0, label: 'Unlimited' };
+    const game = startGame(unlimited);
+    const result = commitMove(game, { from: 'e2', to: 'e4' }, 'WHITE', NOW + 60_000, unlimited);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.clock).toEqual({ whiteMs: 0, blackMs: 0, turnStartedAt: null, running: false });
   });
 });

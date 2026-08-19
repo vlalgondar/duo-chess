@@ -183,7 +183,7 @@ export class RoomDO extends DurableObject {
       return;
     }
 
-    const result = commitMove(room.game, { from, to, promotion }, mover);
+    const result = commitMove(room.game, { from, to, promotion }, mover, Date.now(), room.settings.timeControl);
     if (!result.ok) {
       this.sendError(ws, result.code, result.code, nonce);
       return;

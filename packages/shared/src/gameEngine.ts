@@ -14,6 +14,7 @@
  * `fen` in isolation.
  */
 import { Chess } from 'chess.js';
+import { advanceClock, startClock } from './clock.js';
 import type { ErrorCode, GameState, GameStatus, PromotionPiece, Square, Team, TimeControl } from './types.js';
 
 export type GameEngineResult<T> = { ok: true; value: T } | { ok: false; code: ErrorCode };
@@ -92,12 +93,7 @@ export function startGame(timeControl: TimeControl): GameState {
     sideToMove: 'WHITE',
     proposals: { WHITE: null, BLACK: null },
     annotations: { WHITE: [], BLACK: [] },
-    clock: {
-      whiteMs: timeControl.baseMs,
-      blackMs: timeControl.baseMs,
-      turnStartedAt: null,
-      running: false,
-    },
+    clock: startClock(timeControl),
     status: 'ACTIVE',
     winner: null,
     drawOffer: null,
@@ -113,8 +109,13 @@ export function startGame(timeControl: TimeControl): GameState {
  * annotations (§4.3 rule 7: cleared on *every* commit, including the
  * opponent's) and re-derives `status`/`winner`.
  *
- * Clock advancement (increment on commit, flag-fall) is T-15/T-16's scope,
- * not this task's — `clock` passes through unchanged.
+ * Clock advancement (§4.6: increment on commit, idle until White's first
+ * commit, unlimited mode) is `clock.ts`'s `advanceClock` — see there for the
+ * arithmetic. Once the move ends the game, the clock stops running: there's
+ * no next side to move, so nothing should still look like it's ticking.
+ * Flag-fall *detection* (the alarm that ends a game nobody committed to) is
+ * T-16's scope, not this function's — a move is never rejected here for
+ * arriving after time technically expired.
  *
  * `startFen` is the same test seam as `checkGameEnd`'s — production callers
  * always omit it, since `game.moveHistory` is only ever meaningful relative
@@ -124,6 +125,8 @@ export function commitMove(
   game: GameState,
   move: MoveInput,
   mover: Team,
+  now: number,
+  timeControl: TimeControl,
   startFen?: string,
 ): GameEngineResult<GameState> {
   if (game.status !== 'ACTIVE') return fail('ILLEGAL_MOVE');
@@ -142,6 +145,8 @@ export function commitMove(
 
   const moveHistory = [...game.moveHistory, applied.san];
   const { status, winner } = endStateOf(chess);
+  const advanced = advanceClock(game.clock, mover, now, timeControl);
+  const clock = status === 'ACTIVE' ? advanced : { ...advanced, running: false };
 
   return ok({
     ...game,
@@ -150,6 +155,7 @@ export function commitMove(
     sideToMove: chess.turn() === 'w' ? 'WHITE' : 'BLACK',
     proposals: { WHITE: null, BLACK: null },
     annotations: { WHITE: [], BLACK: [] },
+    clock,
     status,
     winner,
   });
