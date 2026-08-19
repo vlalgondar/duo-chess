@@ -81,6 +81,8 @@ function makeSquareContent(dotSquares: Set<Square>, ringSquares: Set<Square>) {
 interface BoardProps {
   initialFen?: string;
   orientation?: 'white' | 'black';
+  /** Overrides the wrapping div's sizing classes (default: a fixed 640px desktop cap). */
+  sizeClassName?: string;
 }
 
 function createGame(fen: string): Chess {
@@ -100,7 +102,11 @@ function createGame(fen: string): Chess {
  * every move is decided here first, then written back into `position`, so an illegal drop or
  * a promotion still awaiting a piece choice never touches the board's rendered FEN.
  */
-export function Board({ initialFen = START_FEN, orientation = 'white' }: BoardProps) {
+export function Board({
+  initialFen = START_FEN,
+  orientation = 'white',
+  sizeClassName = 'mx-auto w-full max-w-[640px]',
+}: BoardProps) {
   const gameRef = useRef(createGame(initialFen));
   const game = gameRef.current;
 
@@ -183,7 +189,7 @@ export function Board({ initialFen = START_FEN, orientation = 'white' }: BoardPr
   }
 
   return (
-    <div data-testid="board" className="relative mx-auto w-full max-w-[640px]">
+    <div data-testid="board" className={`relative ${sizeClassName}`}>
       {/* Test-only accessor, same spirit as the harness's `debugState()` — lets e2e specs
           assert on the authoritative FEN instead of reverse-engineering it from piece markup. */}
       <span data-testid="fen" className="sr-only">
