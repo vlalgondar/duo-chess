@@ -51,6 +51,14 @@ export function loadSession(): StoredSession | null {
   }
 }
 
+/**
+ * §5.7's `leave`: the seat is gone server-side, so the token must not survive to let
+ * `App.tsx`'s auto-resume effect rejoin on the next page load.
+ */
+export function clearSession(): void {
+  window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
 export interface SocketHandlers {
   onOpen?: () => void;
   onMessage?: (data: string) => void;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildRoomUrl, loadSession, reconnectDelayMs, saveSession } from './socket.js';
+import { buildRoomUrl, clearSession, loadSession, reconnectDelayMs, saveSession } from './socket.js';
 
 /**
  * The package's vitest project runs under plain Node (no DOM), so there's no
@@ -73,6 +73,14 @@ describe('session storage', () => {
     expect(loadSession()).toBeNull();
 
     storage.setItem('duo-chess:session', JSON.stringify({ code: 'K7P2QX' }));
+    expect(loadSession()).toBeNull();
+  });
+
+  it('clearSession removes a saved session so loadSession no longer finds it', () => {
+    saveSession({ code: 'K7P2QX', username: 'alice', resumeToken: 'tok-1' });
+    expect(loadSession()).not.toBeNull();
+
+    clearSession();
     expect(loadSession()).toBeNull();
   });
 });

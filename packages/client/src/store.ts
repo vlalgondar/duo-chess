@@ -67,6 +67,13 @@ interface RoomState {
    * seat order) rather than trusted from the message, and used as the merge key.
    */
   applyAnnotationUpdate: (by: string, annotations: WireAnnotation[]) => void;
+  /**
+   * §5.7's `leave`: back to Home after an intentional departure. Clears every
+   * per-room field — `setView` stays non-nullable, so this is the only path back
+   * to `view: null` — while keeping `soundEnabled`, a persisted user preference,
+   * not room state.
+   */
+  resetRoom: () => void;
 }
 
 export const useRoomStore = create<RoomState>((set) => ({
@@ -105,4 +112,6 @@ export const useRoomStore = create<RoomState>((set) => ({
       const others = view.annotations.filter((a) => a.color !== color);
       return { view: { ...view, annotations: [...others, ...annotations] } };
     }),
+  resetRoom: () =>
+    set({ status: 'idle', view: null, joinError: null, lastError: null, rttMs: null, serverClockOffsetMs: 0 }),
 }));

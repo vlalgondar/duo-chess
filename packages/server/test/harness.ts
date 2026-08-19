@@ -152,7 +152,7 @@ export class TestRoom {
   }
 
   /** Test-only state snapshot, bypassing `redactFor()` entirely — never call this pattern outside tests. */
-  async debugState(): Promise<{ socketCount: number; room: Room | null }> {
+  async debugState(): Promise<{ socketCount: number; room: Room | null; resumeTokenCount: number }> {
     return runInDurableObject(this.stub, (instance) => instance.debugState());
   }
 

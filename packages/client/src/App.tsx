@@ -13,7 +13,15 @@ import {
 import { ReconnectBanner } from './components/ReconnectBanner.js';
 import { RttIndicator } from './components/RttIndicator.js';
 import { useWakeLock } from './hooks/useWakeLock.js';
-import { buildRoomUrl, connectSocket, loadSession, reconnectDelayMs, saveSession, sendMessage } from './net/socket.js';
+import {
+  buildRoomUrl,
+  clearSession,
+  connectSocket,
+  loadSession,
+  reconnectDelayMs,
+  saveSession,
+  sendMessage,
+} from './net/socket.js';
 import { BoardScreen } from './screens/BoardScreen.js';
 import { GameScreen } from './screens/GameScreen.js';
 import { Home } from './screens/Home.js';
@@ -52,6 +60,7 @@ export function App() {
   const setRttMs = useRoomStore((s) => s.setRttMs);
   const appendChatMessage = useRoomStore((s) => s.appendChatMessage);
   const applyAnnotationUpdate = useRoomStore((s) => s.applyAnnotationUpdate);
+  const resetRoom = useRoomStore((s) => s.resetRoom);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Mutable, not state: the `onMessage` closure below needs to know — at the
@@ -73,6 +82,10 @@ export function App() {
   // net) and proactively request a fresh resync — every `state` is already a
   // full snapshot, so this is defense in depth, not something the UI reads.
   const lastSeqRef = useRef<number | null>(null);
+  // §5.7's `leave`: an intentional leave closes the socket itself. Without this,
+  // `onClose` below would see `hasJoinedRef.current === true` and start §9's
+  // reconnect backoff, silently dialing back into the room just left.
+  const intentionalLeaveRef = useRef(false);
 
   const clearReconnectTimer = () => {
     if (reconnectTimerRef.current !== null) {
@@ -148,6 +161,7 @@ export function App() {
         }
       },
       onClose: () => {
+        if (intentionalLeaveRef.current) return;
         if (!hasJoinedRef.current) {
           setStatus('closed');
           return;
@@ -174,6 +188,7 @@ export function App() {
     reconnectAttemptRef.current = 0;
     lastSeqRef.current = null;
     hasJoinedRef.current = false;
+    intentionalLeaveRef.current = false;
     clearReconnectTimer();
     setStatus('connecting');
     setJoinError(null);
@@ -286,6 +301,28 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'rematch' });
   };
 
+  /**
+   * §5.7's `leave`: back to Home, seat freed server-side. Order matters — guard
+   * first (nothing below may trigger a reconnect retry), send before close (same
+   * connection, ordered delivery, so the DO handles `leave` before
+   * `webSocketClose`), and `resetRoom()` last since it's what actually swaps the
+   * screen to Home.
+   */
+  const handleLeave = () => {
+    const ws = wsRef.current;
+    intentionalLeaveRef.current = true;
+    clearReconnectTimer();
+    if (ws && ws.readyState === WebSocket.OPEN) sendMessage(ws, { t: 'leave' });
+    ws?.close(1000, 'left room');
+    wsRef.current = null;
+    hasJoinedRef.current = false;
+    resumeTokenRef.current = undefined;
+    lastSeqRef.current = null;
+    reconnectAttemptRef.current = 0;
+    clearSession();
+    resetRoom();
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -345,6 +382,7 @@ export function App() {
           onStart={handleStart}
           onRandomize={handleRandomizeTeams}
           onPromoteSpectator={handlePromoteSpectator}
+          onLeave={handleLeave}
         />
       </>
     );
@@ -357,7 +395,7 @@ export function App() {
         <div className="fixed right-3 top-3 z-50">
           <RttIndicator rttMs={rttMs} />
         </div>
-        <ResultScreen view={view} onRematch={handleRematch} />
+        <ResultScreen view={view} onRematch={handleRematch} onLeave={handleLeave} />
       </>
     );
   }
@@ -365,7 +403,13 @@ export function App() {
   return (
     <>
       {reconnecting && <ReconnectBanner />}
-      <Lobby view={view} onStart={handleStart} onUpdateSettings={handleUpdateSettings} onPromoteSpectator={handlePromoteSpectator} />
+      <Lobby
+        view={view}
+        onStart={handleStart}
+        onUpdateSettings={handleUpdateSettings}
+        onPromoteSpectator={handlePromoteSpectator}
+        onLeave={handleLeave}
+      />
     </>
   );
 }

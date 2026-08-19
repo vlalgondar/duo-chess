@@ -10,6 +10,7 @@ import {
   errorMessageSchema,
   gameOverMessageSchema,
   joinMessageSchema,
+  leaveMessageSchema,
   moveCommittedMessageSchema,
   parseClientMessage,
   parseServerMessage,
@@ -120,6 +121,12 @@ const CLIENT_CASES: Case[] = [
     schema: joinMessageSchema,
     valid: { t: 'join', code: 'K7P2QX', username: 'ab', resumeToken: 'tok' },
     invalid: { t: 'join', code: 'K7P2QX', username: 'a' },
+  },
+  {
+    name: 'leave',
+    schema: leaveMessageSchema,
+    valid: { t: 'leave' },
+    invalid: { t: 'leave', nonce: '' }, // nonceSchema is min(1) when present
   },
   {
     name: 'set_team',

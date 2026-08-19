@@ -69,6 +69,15 @@ export const joinMessageSchema = withNonce({
   resumeToken: z.string().min(1).optional(),
 });
 
+/**
+ * §5.7's "someone leaves in the lobby, or between games" — frees the seat entirely
+ * (`roomEngine.leaveRoom`), unlike a disconnect, which only clears `connected`.
+ * Rejected during `IN_GAME`: a player mid-game resigns (`vote`), they don't vanish.
+ */
+export const leaveMessageSchema = withNonce({
+  t: z.literal('leave'),
+});
+
 export const setTeamMessageSchema = withNonce({
   t: z.literal('set_team'),
   team: teamSchema.nullable(),
@@ -192,6 +201,7 @@ export const pingMessageSchema = withNonce({
 
 export const clientMessageSchema = z.discriminatedUnion('t', [
   joinMessageSchema,
+  leaveMessageSchema,
   setTeamMessageSchema,
   setReadyMessageSchema,
   updateSettingsMessageSchema,

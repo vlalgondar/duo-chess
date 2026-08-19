@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Chess } from 'chess.js';
 import { GAME_OVER_REASON, type ClientRoomView } from '@duo/shared';
 import { Board } from '../components/Board.js';
+import { LeaveButton } from './Lobby.js';
 
 interface ResultScreenProps {
   view: ClientRoomView;
   onRematch: () => void;
+  onLeave: () => void;
 }
 
 /**
@@ -14,14 +16,15 @@ interface ResultScreenProps {
  * game-ending commit/vote/flag-fall/abandonment to `phase: 'FINISHED'`
  * (T-26) — `App.tsx` routes here instead of `GameScreen` for that phase.
  */
-export function ResultScreen({ view, onRematch }: ResultScreenProps) {
+export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
   const game = view.game;
   const you = view.seats.find((seat) => seat.publicId === view.you);
 
   if (!game) {
     return (
-      <main className="flex min-h-dvh items-center justify-center bg-slate-950 text-slate-100">
+      <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-slate-950 text-slate-100">
         <p data-testid="result-banner">Game over</p>
+        <LeaveButton onLeave={onLeave} />
       </main>
     );
   }
@@ -52,6 +55,8 @@ export function ResultScreen({ view, onRematch }: ResultScreenProps) {
           Rematch
         </button>
       )}
+
+      <LeaveButton onLeave={onLeave} />
     </main>
   );
 }

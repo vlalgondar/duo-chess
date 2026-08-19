@@ -15,9 +15,10 @@ interface LobbyProps {
   onStart: () => void;
   onUpdateSettings: (settings: RoomSettings) => void;
   onPromoteSpectator: (publicId: string, team: Team) => void;
+  onLeave: () => void;
 }
 
-export function Lobby({ view, onStart, onUpdateSettings, onPromoteSpectator }: LobbyProps) {
+export function Lobby({ view, onStart, onUpdateSettings, onPromoteSpectator, onLeave }: LobbyProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const isHost = you?.isHost ?? false;
   const canStart = view.seats.length >= MIN_PLAYERS_TO_START;
@@ -80,7 +81,27 @@ export function Lobby({ view, onStart, onUpdateSettings, onPromoteSpectator }: L
       ) : (
         <p className="text-sm text-slate-400">Waiting for the host to start…</p>
       )}
+
+      <LeaveButton onLeave={onLeave} />
     </main>
+  );
+}
+
+/**
+ * §5.7's `leave`: frees the seat entirely and returns to Home — distinct from a
+ * disconnect (closing the tab), which keeps the seat reserved for §9 reconnection.
+ * `h-11` is exactly 44px (CLAUDE.md rule 9's minimum tap target).
+ */
+export function LeaveButton({ onLeave }: { onLeave: () => void }) {
+  return (
+    <button
+      data-testid="leave-button"
+      type="button"
+      onClick={onLeave}
+      className="flex h-11 w-64 items-center justify-center rounded bg-slate-700 text-sm font-semibold text-slate-300"
+    >
+      Leave room
+    </button>
   );
 }
 

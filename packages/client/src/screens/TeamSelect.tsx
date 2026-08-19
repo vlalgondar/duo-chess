@@ -1,5 +1,6 @@
 import { canStartGame, MAX_TEAM_SIZE, type ClientRoomView, type PublicSeat, type Team } from '@duo/shared';
 import { Spectators } from '../components/Spectators.js';
+import { LeaveButton } from './Lobby.js';
 
 /** Mirrors `RoomState['lastError']` (store.ts) — an in-session rejection, not a failed join. */
 type LastError = { code: string; at: number } | null;
@@ -12,6 +13,7 @@ interface TeamSelectProps {
   onStart: () => void;
   onRandomize: () => void;
   onPromoteSpectator: (publicId: string, team: Team) => void;
+  onLeave: () => void;
 }
 
 /** Left-to-right strip order (§5.4): Team 1 (white) — Unassigned — Team 2 (black). */
@@ -37,6 +39,7 @@ export function TeamSelect({
   onStart,
   onRandomize,
   onPromoteSpectator,
+  onLeave,
 }: TeamSelectProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const isHost = you?.isHost ?? false;
@@ -118,6 +121,8 @@ export function TeamSelect({
       ) : (
         <p className="text-sm text-slate-400">Waiting for the host to start…</p>
       )}
+
+      <LeaveButton onLeave={onLeave} />
     </main>
   );
 }

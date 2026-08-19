@@ -10,6 +10,7 @@ import {
   flagFallDeadline,
   GAME_OVER_REASON,
   joinRoom,
+  leaveRoom,
   parseClientMessage,
   promoteSpectator,
   randomizeTeams,
@@ -237,6 +238,11 @@ export class RoomDO extends DurableObject {
     const attachment = ws.deserializeAttachment();
     if (!isSocketAttachment(attachment)) {
       this.sendError(ws, 'NOT_JOINED', 'send join before any other message', message.nonce);
+      return;
+    }
+
+    if (message.t === 'leave') {
+      await this.handleLeave(ws, attachment.seatId, message.nonce);
       return;
     }
 
@@ -1116,6 +1122,72 @@ export class RoomDO extends DurableObject {
   }
 
   /**
+   * `leave` (§5.7): frees the seat outright — the counterpart to `handleJoin`, and the
+   * first production caller of `roomEngine.leaveRoom` (dead code since T-07; T-23's
+   * Findings flagged that spectator promotion was otherwise unreachable). Distinct from
+   * `webSocketClose`, which only flips `connected` and keeps the seat for §9
+   * reconnection. Rejected during `IN_GAME` — a player mid-game resigns instead (§4.5),
+   * so vacating a seat under a live game never has to interact with abandonment.
+   */
+  private async handleLeave(ws: WebSocket, seatId: string, nonce?: string): Promise<void> {
+    const room = this.room;
+    if (!room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    if (room.phase === 'IN_GAME') {
+      this.sendError(ws, 'INVALID_PHASE', 'cannot leave mid-game — resign instead', nonce);
+      return;
+    }
+
+    const next = leaveRoom(room, seatId);
+
+    // Drop the socket's identity *before* closing: `webSocketClose` would otherwise run
+    // `setConnected` for a seat that no longer exists — a silent no-op (`setConnected`
+    // maps over `seats`/`spectators` and matches nothing) that would still cost a
+    // redundant persist + full broadcast. `broadcastState`/`broadcastAll` also skip
+    // unattached sockets for free, so the leaver is excluded from the very broadcast
+    // that announces their own departure.
+    ws.serializeAttachment(null);
+
+    if (next === room) {
+      // Unknown/duplicate seatId — `leaveRoom` is idempotent and returned the room
+      // unchanged (e.g. a second `leave` racing on the same socket).
+      if (isSocketOpen(ws)) ws.close(1000, 'left room');
+      return;
+    }
+
+    this.room = next;
+    // Nothing else prunes `resumeTokens`. A leaver's token is dead weight — `handleJoin`
+    // would fall through to a fresh join anyway once `findParticipant` misses on the
+    // removed seat — but pruning it here means a stale token can never even resolve to a
+    // seatId that used to exist.
+    this.resumeTokens = Object.fromEntries(Object.entries(this.resumeTokens).filter(([, id]) => id !== seatId));
+
+    if (next.seats.length === 0 && next.spectators.length === 0) {
+      // No participants left means no host and no way to ever start again (`joinRoom`
+      // only makes the *first* joiner of a room a host, via `createRoom`) — the room
+      // would otherwise sit unusable until the 4-hour idle alarm. Reuse T-28's
+      // `expireRoom()`: it closes every remaining socket (including this one) and wipes
+      // storage, so the next `join` on this code builds a fresh room via `createRoom`,
+      // exactly the "storage got wiped" story T-28 already documented. Guarded on
+      // spectators too — `expireRoom()` closes *all* sockets, which would be wrong if
+      // anyone else were still watching.
+      await this.expireRoom();
+      await this.scheduleAlarm();
+      return;
+    }
+
+    await this.persist();
+    await this.broadcastState();
+    if (isSocketOpen(ws)) ws.close(1000, 'left room');
+    // §9: a departure can change a team's abandonment deadline (or clear it, if the
+    // team is now empty) — re-derive the alarm immediately, same precedent as a
+    // disconnect (`webSocketClose`) or a vote (`handleVote`).
+    await this.scheduleAlarm();
+  }
+
+  /**
    * Sends every connected, joined socket its own `redactFor()` view under
    * the same `seq` — the one path from server state to the wire (CLAUDE.md
    * rule 3). `justJoined` carries the fresh/reused resume token that goes
@@ -1142,7 +1214,12 @@ export class RoomDO extends DurableObject {
     }
   }
 
+  // §10/T-28: same `isSocketOpen` guard as every other `send()` call site — a message
+  // arriving on a socket we ourselves just closed (e.g. a second `leave` racing the
+  // close handshake of the first) would otherwise throw `Can't call WebSocket send()
+  // after close()` here, uncaught, since `sendError` was the one send-site T-28 missed.
   private sendError(ws: WebSocket, code: ErrorCode, message: string, nonce?: string): void {
+    if (!isSocketOpen(ws)) return;
     ws.send(JSON.stringify({ t: 'error', code, message, nonce }));
   }
 
@@ -1177,8 +1254,12 @@ export class RoomDO extends DurableObject {
    * the harness — never reachable over the wire. Bypasses `redactFor()`
    * deliberately: this is for assertions, not anything a client should see.
    */
-  debugState(): { socketCount: number; room: Room | null } {
-    return { socketCount: this.ctx.getWebSockets().length, room: this.room };
+  debugState(): { socketCount: number; room: Room | null; resumeTokenCount: number } {
+    return {
+      socketCount: this.ctx.getWebSockets().length,
+      room: this.room,
+      resumeTokenCount: Object.keys(this.resumeTokens).length,
+    };
   }
 
   /**
