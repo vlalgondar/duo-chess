@@ -5,6 +5,7 @@ import {
   MAX_SPECTATORS,
   advanceToTeamSelect,
   canStartGame,
+  connectedTeamSize,
   createRoom,
   joinRoom,
   leaveRoom,
@@ -335,6 +336,27 @@ describe('canStartGame', () => {
 
   it('ignores unassigned seats sitting alongside a valid split', () => {
     expect(canStartGame(seatsWithTeams(['WHITE', 'BLACK', null]))).toBe(true);
+  });
+});
+
+describe('connectedTeamSize', () => {
+  function seat(team: Team | null, connected: boolean): { team: Team | null; connected: boolean } {
+    return { team, connected };
+  }
+
+  it('counts only connected seats on the given team', () => {
+    const seats = [seat('WHITE', true), seat('WHITE', true), seat('BLACK', true)];
+    expect(connectedTeamSize(seats, 'WHITE')).toBe(2);
+    expect(connectedTeamSize(seats, 'BLACK')).toBe(1);
+  });
+
+  it('excludes a disconnected teammate — a 2-player team reads as solo (§9)', () => {
+    const seats = [seat('WHITE', true), seat('WHITE', false)];
+    expect(connectedTeamSize(seats, 'WHITE')).toBe(1);
+  });
+
+  it('is 0 for a team with no occupied seats', () => {
+    expect(connectedTeamSize([seat('WHITE', true)], 'BLACK')).toBe(0);
   });
 });
 

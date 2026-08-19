@@ -280,3 +280,46 @@ export function acceptProposal(
   if (current.by === by) return fail('CANNOT_SELF_ACCEPT');
   return commitMove(game, { from: current.from, to: current.to, promotion: current.promotion }, team, now, timeControl);
 }
+
+/**
+ * §4.4: a team of more than one *connected* player must confirm a move via
+ * propose/accept; a solo team doesn't. `teamSize` is the caller's count of
+ * currently-connected seats on the team (e.g. `roomEngine.connectedTeamSize`)
+ * — a 2-player team with a disconnected teammate is solo too (§9), which is
+ * why this takes a plain count rather than re-deriving "solo" from a seat
+ * roster this module never has.
+ */
+export function requiresConfirmation(teamSize: number): boolean {
+  return teamSize > 1;
+}
+
+/**
+ * A team member's move submission — the one entry point regardless of team
+ * size, matching §4.4's "implemented as `propose()` immediately followed by
+ * an internal auto-commit, so there's exactly one code path for applying
+ * moves." A team that requires confirmation gets a real proposal, awaiting a
+ * teammate's `acceptProposal`; a solo team's move commits immediately,
+ * through the exact same `commitMove` every accepted proposal uses.
+ */
+export function submitMove(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  move: MoveInput,
+  now: number,
+  timeControl: TimeControl,
+  teamSize: number,
+): GameEngineResult<GameState> {
+  const proposed = proposeMove(game, team, by, move, now);
+  if (!proposed.ok) return proposed;
+  if (requiresConfirmation(teamSize)) return proposed;
+
+  const proposal = proposed.value.proposals[team]!;
+  return commitMove(
+    proposed.value,
+    { from: proposal.from, to: proposal.to, promotion: proposal.promotion },
+    team,
+    now,
+    timeControl,
+  );
+}

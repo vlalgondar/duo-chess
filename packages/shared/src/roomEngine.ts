@@ -243,6 +243,20 @@ export function canStartGame(seats: ReadonlyArray<{ team: Team | null }>): boole
 }
 
 /**
+ * How many of `team`'s seats currently count toward requiring confirmation
+ * (§4.4 solo teams; §9 "a disconnected teammate ... team is temporarily
+ * treated as solo"). Only *connected* seats count, so a 2-player team with
+ * one teammate disconnected reads identically to a genuinely-solo 2v1 seat —
+ * no special-casing needed at the call site (`gameEngine.requiresConfirmation`).
+ */
+export function connectedTeamSize(
+  seats: ReadonlyArray<{ team: Team | null; connected: boolean }>,
+  team: Team,
+): number {
+  return seats.filter((s) => s.team === team && s.connected).length;
+}
+
+/**
  * Host-only `LOBBY` -> `TEAM_SELECT` transition (T-17, resolving the
  * §5.3/§5.4 screen-map ambiguity logged in TASKS.md's Findings): the
  * Lobby's existing Start button, gated on player count alone since T-10,

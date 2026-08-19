@@ -7,9 +7,12 @@ import {
   legalMoves,
   proposeMove,
   rejectProposal,
+  requiresConfirmation,
   startGame,
+  submitMove,
   withdrawProposal,
 } from './gameEngine.js';
+import { connectedTeamSize } from './roomEngine.js';
 import type { GameState, Square } from './types.js';
 
 const TIME_CONTROL = { baseMs: 600_000, incrementMs: 5_000, label: '10+5' };
@@ -377,6 +380,129 @@ describe('propose/accept state machine', () => {
     const result = rejectProposal(proposed.value, 'WHITE', BOB, id);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.value.proposals.WHITE).toBeNull();
+  });
+});
+
+describe('requiresConfirmation / submitMove (§4.4 solo teams)', () => {
+  const ALICE = 'seat-alice';
+  const BOB = 'seat-bob';
+  const CAROL = 'seat-carol';
+
+  it.each([
+    [1, false],
+    [2, true],
+  ])('requiresConfirmation(%i) is %s', (teamSize, expected) => {
+    expect(requiresConfirmation(teamSize)).toBe(expected);
+  });
+
+  it('a solo team (teamSize 1) commits directly on submitMove', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = submitMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW, TIME_CONTROL, 1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.fen).not.toBe(game.fen);
+    expect(result.value.moveHistory).toEqual(['e4']);
+    expect(result.value.proposals.WHITE).toBeNull();
+  });
+
+  it('a 2-player team (teamSize 2) only proposes on submitMove, leaving the position unchanged', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = submitMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW, TIME_CONTROL, 2);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.fen).toBe(game.fen);
+    expect(result.value.moveHistory).toEqual([]);
+    expect(result.value.proposals.WHITE).toMatchObject({ by: ALICE, from: 'e2', to: 'e4', san: 'e4' });
+  });
+
+  it('runs a 1v1 (both teams solo) game to completion via submitMove', () => {
+    // Fool's Mate: f3 e5 g4 Qh4#, each move submitted solo and auto-committed.
+    const moves: Array<{ team: 'WHITE' | 'BLACK'; by: string; from: Square; to: Square }> = [
+      { team: 'WHITE', by: ALICE, from: 'f2', to: 'f3' },
+      { team: 'BLACK', by: BOB, from: 'e7', to: 'e5' },
+      { team: 'WHITE', by: ALICE, from: 'g2', to: 'g4' },
+      { team: 'BLACK', by: BOB, from: 'd8', to: 'h4' },
+    ];
+    let game = startGame(TIME_CONTROL);
+    let now = NOW;
+    for (const { team, by, from, to } of moves) {
+      const result = submitMove(game, team, by, { from, to }, now, TIME_CONTROL, 1);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('move rejected');
+      game = result.value;
+      now += 1_000;
+    }
+    expect(game.status).toBe('CHECKMATE');
+    expect(game.winner).toBe('BLACK');
+  });
+
+  it('runs a 2v1 game to completion, one team solo and the other requiring accept', () => {
+    // WHITE is solo (Alice only); BLACK is a 2-player team (Bob proposes, Carol accepts).
+    let game = startGame(TIME_CONTROL);
+    let now = NOW;
+
+    const white = submitMove(game, 'WHITE', ALICE, { from: 'f2', to: 'f3' }, now, TIME_CONTROL, 1);
+    expect(white.ok).toBe(true);
+    if (!white.ok) return;
+    game = white.value;
+    now += 1_000;
+
+    const blackProposed1 = submitMove(game, 'BLACK', BOB, { from: 'e7', to: 'e5' }, now, TIME_CONTROL, 2);
+    expect(blackProposed1.ok).toBe(true);
+    if (!blackProposed1.ok) return;
+    expect(blackProposed1.value.fen).toBe(game.fen); // still just a proposal
+    const blackAccepted1 = acceptProposal(
+      blackProposed1.value,
+      'BLACK',
+      CAROL,
+      blackProposed1.value.proposals.BLACK!.id,
+      now + 1,
+      TIME_CONTROL,
+    );
+    expect(blackAccepted1.ok).toBe(true);
+    if (!blackAccepted1.ok) return;
+    game = blackAccepted1.value;
+    now += 2_000;
+
+    const white2 = submitMove(game, 'WHITE', ALICE, { from: 'g2', to: 'g4' }, now, TIME_CONTROL, 1);
+    expect(white2.ok).toBe(true);
+    if (!white2.ok) return;
+    game = white2.value;
+    now += 1_000;
+
+    const blackProposed2 = submitMove(game, 'BLACK', BOB, { from: 'd8', to: 'h4' }, now, TIME_CONTROL, 2);
+    expect(blackProposed2.ok).toBe(true);
+    if (!blackProposed2.ok) return;
+    const blackAccepted2 = acceptProposal(
+      blackProposed2.value,
+      'BLACK',
+      CAROL,
+      blackProposed2.value.proposals.BLACK!.id,
+      now + 1,
+      TIME_CONTROL,
+    );
+    expect(blackAccepted2.ok).toBe(true);
+    if (!blackAccepted2.ok) return;
+
+    expect(blackAccepted2.value.status).toBe('CHECKMATE');
+    expect(blackAccepted2.value.winner).toBe('BLACK');
+  });
+
+  it('a disconnected partner\'s team behaves as solo: connectedTeamSize drives requiresConfirmation', () => {
+    const seats = [
+      { team: 'WHITE' as const, connected: true },
+      { team: 'WHITE' as const, connected: false }, // Dave, disconnected
+    ];
+    const teamSize = connectedTeamSize(seats, 'WHITE');
+    expect(teamSize).toBe(1);
+    expect(requiresConfirmation(teamSize)).toBe(false);
+
+    const game = startGame(TIME_CONTROL);
+    const result = submitMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW, TIME_CONTROL, teamSize);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.moveHistory).toEqual(['e4']);
     expect(result.value.proposals.WHITE).toBeNull();
   });
 });
