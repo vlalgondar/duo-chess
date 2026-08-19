@@ -1,6 +1,15 @@
 import { Chess } from 'chess.js';
 import { describe, expect, it } from 'vitest';
-import { checkGameEnd, commitMove, legalMoves, startGame } from './gameEngine.js';
+import {
+  acceptProposal,
+  checkGameEnd,
+  commitMove,
+  legalMoves,
+  proposeMove,
+  rejectProposal,
+  startGame,
+  withdrawProposal,
+} from './gameEngine.js';
 import type { GameState, Square } from './types.js';
 
 const TIME_CONTROL = { baseMs: 600_000, incrementMs: 5_000, label: '10+5' };
@@ -220,5 +229,154 @@ describe('commitMove', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.clock).toEqual({ whiteMs: 0, blackMs: 0, turnStartedAt: null, running: false });
+  });
+});
+
+describe('propose/accept state machine', () => {
+  const ALICE = 'seat-alice';
+  const BOB = 'seat-bob';
+  const CAROL = 'seat-carol';
+
+  it('rejects accepting your own proposal with CANNOT_SELF_ACCEPT', () => {
+    const game = startGame(TIME_CONTROL);
+    const proposed = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(proposed.ok).toBe(true);
+    if (!proposed.ok) return;
+    const result = acceptProposal(proposed.value, 'WHITE', ALICE, proposed.value.proposals.WHITE!.id, NOW, TIME_CONTROL);
+    expect(result).toEqual({ ok: false, code: 'CANNOT_SELF_ACCEPT' });
+  });
+
+  it('replaces the slot and bumps proposalId on re-propose', () => {
+    const game = startGame(TIME_CONTROL);
+    const first = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const firstId = first.value.proposals.WHITE!.id;
+
+    const second = proposeMove(first.value, 'WHITE', ALICE, { from: 'd2', to: 'd4' }, NOW + 1);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    const proposal = second.value.proposals.WHITE;
+    expect(proposal?.id).not.toBe(firstId);
+    expect(proposal).toMatchObject({ from: 'd2', to: 'd4', by: ALICE, san: 'd4' });
+  });
+
+  it('swaps proposer and accepter on a counter-propose', () => {
+    const game = startGame(TIME_CONTROL);
+    const proposed = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(proposed.ok).toBe(true);
+    if (!proposed.ok) return;
+
+    const countered = proposeMove(proposed.value, 'WHITE', BOB, { from: 'd2', to: 'd4' }, NOW + 1);
+    expect(countered.ok).toBe(true);
+    if (!countered.ok) return;
+    expect(countered.value.proposals.WHITE).toMatchObject({ by: BOB, from: 'd2', to: 'd4' });
+
+    // Now Alice — the original proposer, now the accepter — may accept.
+    const accepted = acceptProposal(
+      countered.value,
+      'WHITE',
+      ALICE,
+      countered.value.proposals.WHITE!.id,
+      NOW + 2,
+      TIME_CONTROL,
+    );
+    expect(accepted.ok).toBe(true);
+  });
+
+  it('rejects a stale proposalId with PROPOSAL_CHANGED and commits nothing', () => {
+    const game = startGame(TIME_CONTROL);
+    const proposed = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(proposed.ok).toBe(true);
+    if (!proposed.ok) return;
+    const staleId = proposed.value.proposals.WHITE!.id;
+
+    const replaced = proposeMove(proposed.value, 'WHITE', ALICE, { from: 'd2', to: 'd4' }, NOW + 1);
+    expect(replaced.ok).toBe(true);
+    if (!replaced.ok) return;
+
+    const result = acceptProposal(replaced.value, 'WHITE', BOB, staleId, NOW + 2, TIME_CONTROL);
+    expect(result).toEqual({ ok: false, code: 'PROPOSAL_CHANGED' });
+    // the position and the slot are both untouched
+    expect(replaced.value.fen).toBe(game.fen);
+    expect(replaced.value.proposals.WHITE?.from).toBe('d2');
+  });
+
+  it('rejects a propose made out of turn', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = proposeMove(game, 'BLACK', CAROL, { from: 'e7', to: 'e5' }, NOW);
+    expect(result).toEqual({ ok: false, code: 'NOT_YOUR_TURN' });
+  });
+
+  it('rejects an illegal move at propose time', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e5' }, NOW);
+    expect(result).toEqual({ ok: false, code: 'ILLEGAL_MOVE' });
+    expect(game.proposals.WHITE).toBeNull();
+  });
+
+  it('clears proposals and annotations for both teams on every commit, including the opponent\'s', () => {
+    let game = startGame(TIME_CONTROL);
+    game = { ...game, annotations: { WHITE: [{ by: ALICE, kind: 'CIRCLE', from: 'e4', color: 'A' }], BLACK: [] } };
+
+    const whiteProposed = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(whiteProposed.ok).toBe(true);
+    if (!whiteProposed.ok) return;
+    const whiteAccepted = acceptProposal(
+      whiteProposed.value,
+      'WHITE',
+      BOB,
+      whiteProposed.value.proposals.WHITE!.id,
+      NOW + 1,
+      TIME_CONTROL,
+    );
+    expect(whiteAccepted.ok).toBe(true);
+    if (!whiteAccepted.ok) return;
+    expect(whiteAccepted.value.proposals).toEqual({ WHITE: null, BLACK: null });
+    expect(whiteAccepted.value.annotations).toEqual({ WHITE: [], BLACK: [] });
+
+    // Black proposes, then White's own commit (a hypothetical solo-team direct
+    // move in this test, via commitMove) must clear Black's still-live slot too.
+    const blackProposed = proposeMove(whiteAccepted.value, 'BLACK', CAROL, { from: 'e7', to: 'e5' }, NOW + 2);
+    expect(blackProposed.ok).toBe(true);
+    if (!blackProposed.ok) return;
+    expect(blackProposed.value.proposals.BLACK).not.toBeNull();
+
+    const opponentCommit = commitMove(blackProposed.value, { from: 'e7', to: 'e5' }, 'BLACK', NOW + 3, TIME_CONTROL);
+    expect(opponentCommit.ok).toBe(true);
+    if (!opponentCommit.ok) return;
+    expect(opponentCommit.value.proposals).toEqual({ WHITE: null, BLACK: null });
+  });
+
+  it('only the proposer may withdraw', () => {
+    const game = startGame(TIME_CONTROL);
+    const proposed = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(proposed.ok).toBe(true);
+    if (!proposed.ok) return;
+    const id = proposed.value.proposals.WHITE!.id;
+
+    const wrongSeat = withdrawProposal(proposed.value, 'WHITE', BOB, id);
+    expect(wrongSeat).toEqual({ ok: false, code: 'NOT_PROPOSER' });
+
+    const result = withdrawProposal(proposed.value, 'WHITE', ALICE, id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.proposals.WHITE).toBeNull();
+  });
+
+  it('rejects a self-reject with CANNOT_SELF_REJECT', () => {
+    const game = startGame(TIME_CONTROL);
+    const proposed = proposeMove(game, 'WHITE', ALICE, { from: 'e2', to: 'e4' }, NOW);
+    expect(proposed.ok).toBe(true);
+    if (!proposed.ok) return;
+    const id = proposed.value.proposals.WHITE!.id;
+
+    const selfReject = rejectProposal(proposed.value, 'WHITE', ALICE, id);
+    expect(selfReject).toEqual({ ok: false, code: 'CANNOT_SELF_REJECT' });
+
+    const result = rejectProposal(proposed.value, 'WHITE', BOB, id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.proposals.WHITE).toBeNull();
   });
 });

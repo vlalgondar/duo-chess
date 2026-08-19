@@ -180,6 +180,9 @@ export interface ClientRoomView {
  * isn't one of §5.4's four valid shapes (or a seat is still Unassigned).
  * `NOT_ALL_READY` is T-17's other `start_game`-from-`TEAM_SELECT` rejection:
  * a valid composition where not every seat has toggled Ready yet.
+ * `NOT_PROPOSER` (T-18) is `withdraw` attempted by anyone but the proposal's
+ * own proposer; `CANNOT_SELF_REJECT` is `reject` attempted by the proposer
+ * against their own proposal (the accepter-only mirror of `CANNOT_SELF_ACCEPT`).
  */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
@@ -197,4 +200,6 @@ export type ErrorCode =
   | 'INVALID_MESSAGE'
   | 'NOT_JOINED'
   | 'TEAM_SIZE_INVALID'
-  | 'NOT_ALL_READY';
+  | 'NOT_ALL_READY'
+  | 'NOT_PROPOSER'
+  | 'CANNOT_SELF_REJECT';

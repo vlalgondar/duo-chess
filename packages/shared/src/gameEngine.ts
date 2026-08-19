@@ -15,7 +15,17 @@
  */
 import { Chess } from 'chess.js';
 import { advanceClock, startClock } from './clock.js';
-import type { ErrorCode, GameState, GameStatus, PromotionPiece, Square, Team, TimeControl } from './types.js';
+import type {
+  ErrorCode,
+  GameState,
+  GameStatus,
+  Proposal,
+  PromotionPiece,
+  SeatId,
+  Square,
+  Team,
+  TimeControl,
+} from './types.js';
 
 export type GameEngineResult<T> = { ok: true; value: T } | { ok: false; code: ErrorCode };
 
@@ -159,4 +169,114 @@ export function commitMove(
     status,
     winner,
   });
+}
+
+/**
+ * The propose/accept state machine, per docs/DESIGN.md §4.3: a single
+ * versioned proposal slot per team. `team`/`by` are supplied by the caller
+ * (the Durable Object, which knows the acting seat's team from `room.seats`)
+ * rather than looked up here — this module has no seat roster, only the
+ * game's own `proposals` slot.
+ */
+
+/** `v1`, then `v2`, `v3`, ... — regenerated on every replacement (rule 1). */
+function nextProposalId(current: Proposal | null): string {
+  const match = current !== null ? /^v(\d+)$/.exec(current.id) : null;
+  const n = match !== null ? Number(match[1]) : 0;
+  return `v${n + 1}`;
+}
+
+/** Validates `move` against `fen` and returns its SAN, without mutating any GameState. */
+function tryMove(fen: string, move: MoveInput): { ok: true; san: string } | { ok: false } {
+  const chess = new Chess(fen);
+  try {
+    const applied =
+      move.promotion !== undefined
+        ? chess.move({ from: move.from, to: move.to, promotion: move.promotion })
+        : chess.move({ from: move.from, to: move.to });
+    return { ok: true, san: applied.san };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Proposes (or re-proposes, or counter-proposes) `move` for `team`'s slot.
+ * Re-propose and counter-propose are the same call (rule 4 — "counter-proposing
+ * is just proposing"): whichever teammate calls this becomes `by`, replacing
+ * whatever was there and bumping the version.
+ *
+ * Validated for legality here (rule 8), against the *current* position only —
+ * unlike `commitMove`, a proposal never needs the full history replay, since
+ * threefold/fifty-move state can't change until something actually commits.
+ */
+export function proposeMove(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  move: MoveInput,
+  now: number,
+): GameEngineResult<GameState> {
+  if (game.status !== 'ACTIVE') return fail('ILLEGAL_MOVE');
+  if (team !== game.sideToMove) return fail('NOT_YOUR_TURN');
+
+  const attempt = tryMove(game.fen, move);
+  if (!attempt.ok) return fail('ILLEGAL_MOVE');
+
+  const proposal: Proposal = {
+    id: nextProposalId(game.proposals[team]),
+    by,
+    from: move.from,
+    to: move.to,
+    promotion: move.promotion,
+    san: attempt.san,
+    proposedAt: now,
+  };
+  return ok({ ...game, proposals: { ...game.proposals, [team]: proposal } });
+}
+
+/** Proposer withdraws their own live proposal, clearing the slot. */
+export function withdrawProposal(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  proposalId: string,
+): GameEngineResult<GameState> {
+  const current = game.proposals[team];
+  if (current === null || current.id !== proposalId) return fail('PROPOSAL_CHANGED');
+  if (current.by !== by) return fail('NOT_PROPOSER');
+  return ok({ ...game, proposals: { ...game.proposals, [team]: null } });
+}
+
+/** Accepter rejects the live proposal — a soft "try something else" (rule 6). */
+export function rejectProposal(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  proposalId: string,
+): GameEngineResult<GameState> {
+  const current = game.proposals[team];
+  if (current === null || current.id !== proposalId) return fail('PROPOSAL_CHANGED');
+  if (current.by === by) return fail('CANNOT_SELF_REJECT');
+  return ok({ ...game, proposals: { ...game.proposals, [team]: null } });
+}
+
+/**
+ * Accepter confirms the live proposal, committing it via the same
+ * `commitMove` every other path uses (T-14/T-19's "exactly one code path").
+ * A stale `proposalId` — the slot changed since the client last rendered it —
+ * commits nothing (rule 3). Self-accept is refused (rule 2).
+ */
+export function acceptProposal(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  proposalId: string,
+  now: number,
+  timeControl: TimeControl,
+): GameEngineResult<GameState> {
+  const current = game.proposals[team];
+  if (current === null || current.id !== proposalId) return fail('PROPOSAL_CHANGED');
+  if (current.by === by) return fail('CANNOT_SELF_ACCEPT');
+  return commitMove(game, { from: current.from, to: current.to, promotion: current.promotion }, team, now, timeControl);
 }

@@ -377,6 +377,8 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'NOT_JOINED',
   'TEAM_SIZE_INVALID',
   'NOT_ALL_READY',
+  'NOT_PROPOSER',
+  'CANNOT_SELF_REJECT',
 ]);
 
 export const errorMessageSchema = z.object({
