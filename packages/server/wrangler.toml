@@ -10,5 +10,9 @@ class_name = "RoomDO"
 tag = "v1"
 new_sqlite_classes = ["RoomDO"]
 
+# Comma-separated, no spaces. Includes both local dev origins (vite dev / vite
+# preview) and the production Vercel domain, since this one list is used for
+# both `wrangler dev` and `wrangler deploy` — there's no separate prod config.
+# Update this if the Vercel project name or a custom domain ever changes.
 [vars]
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173,https://duo-chess.vercel.app"
