@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { startOneVOneGame } from './gameSetup.js';
 import { spawnRoom } from './harness.js';
 
 async function readyTwoPlayerRoom(code: string) {
@@ -18,9 +19,7 @@ describe('clocks with durable object alarms (T-16)', () => {
       const { room, alice, bob } = await readyTwoPlayerRoom('GM9AC2');
       await room.setTimeControl({ baseMs: 2_000, incrementMs: 0, label: 'test-2s' });
 
-      alice.send({ t: 'start_game' });
-      await alice.expect('state', (m) => m.phase === 'IN_GAME');
-      await bob.expect('state', (m) => m.phase === 'IN_GAME');
+      await startOneVOneGame(alice, bob);
 
       // White's commit starts the clock running against BLACK (§4.6). Neither
       // client sends anything else — the alarm, not a client, must end this.
@@ -51,9 +50,7 @@ describe('clocks with durable object alarms (T-16)', () => {
     const { room, alice, bob } = await readyTwoPlayerRoom('GM9AC3');
     await room.setTimeControl({ baseMs: 60_000, incrementMs: 1_000, label: 'test-60+1' });
 
-    alice.send({ t: 'start_game' });
-    await alice.expect('state', (m) => m.phase === 'IN_GAME');
-    await bob.expect('state', (m) => m.phase === 'IN_GAME');
+    await startOneVOneGame(alice, bob);
 
     // White's clock was never running before this commit, so elapsed is
     // exactly 0 — the increment lands on top of the untouched base with no
@@ -79,9 +76,7 @@ describe('clocks with durable object alarms (T-16)', () => {
     const { room, alice, bob } = await readyTwoPlayerRoom('GM9AC4');
     await room.setTimeControl({ baseMs: 60_000, incrementMs: 0, label: 'test-60s' });
 
-    alice.send({ t: 'start_game' });
-    await alice.expect('state', (m) => m.phase === 'IN_GAME');
-    await bob.expect('state', (m) => m.phase === 'IN_GAME');
+    await startOneVOneGame(alice, bob);
 
     // Starts the clock (and schedules the flag-fall alarm) for BLACK.
     alice.send({ t: 'propose', from: 'e2', to: 'e4' });

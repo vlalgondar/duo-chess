@@ -6,10 +6,9 @@
  * (the Durable Object, per T-09's "join handshake issues seatId +
  * resumeToken") and passed in, so every outcome here is deterministic.
  *
- * `canStartGame` is a pure predicate over team composition, for T-17's future
- * team-select-validated `start_game`. `startOneVOneGame` (T-14) is a
- * separate, narrower transition to `IN_GAME` for the 1v1 case only — see its
- * own doc comment for why it doesn't reuse `canStartGame`.
+ * `canStartGame` is a pure predicate over team composition, used by
+ * `startGameFromTeamSelect` (T-17) to validate the real, team-select-gated
+ * `IN_GAME` transition — see its own doc comment.
  */
 import { startGame as buildInitialGameState } from './gameEngine.js';
 import { DEFAULT_TIME_CONTROL } from './timeControls.js';
@@ -132,10 +131,19 @@ export function leaveRoom(room: Room, seatId: SeatId): Room {
   return spectators.length === room.spectators.length ? room : { ...room, spectators };
 }
 
-/** `team: null` unassigns. Joining a team already at `MAX_TEAM_SIZE` is rejected. */
+/**
+ * `team: null` unassigns. Joining a team already at `MAX_TEAM_SIZE` is
+ * rejected. Blocked outside `LOBBY`/`TEAM_SELECT`: `RoomDO.handlePropose`
+ * (T-14) trusts `seat.team` fresh off `room.seats` on every `propose` to
+ * decide who's moving for which side, so an unguarded mid-game `set_team`
+ * would let a player hop onto whichever side is on move and commit moves
+ * that aren't theirs — exactly the class of bug CLAUDE.md rule 2 exists to
+ * prevent, invisible in manual testing until someone tries it maliciously.
+ */
 export function setTeam(room: Room, seatId: SeatId, team: Team | null, now: number): RoomEngineResult<Room> {
   const seat = room.seats.find((s) => s.seatId === seatId);
   if (!seat) return fail('SEAT_NOT_FOUND');
+  if (room.phase === 'IN_GAME' || room.phase === 'FINISHED') return fail('INVALID_PHASE');
 
   if (team !== null && seat.team !== team) {
     const teamSize = room.seats.filter((s) => s.team === team).length;
@@ -146,9 +154,11 @@ export function setTeam(room: Room, seatId: SeatId, team: Team | null, now: numb
   return ok({ ...room, seats });
 }
 
+/** Blocked outside `LOBBY`/`TEAM_SELECT` — "ready" has no meaning once a game is already running. */
 export function setReady(room: Room, seatId: SeatId, ready: boolean, now: number): RoomEngineResult<Room> {
   const seat = room.seats.find((s) => s.seatId === seatId);
   if (!seat) return fail('SEAT_NOT_FOUND');
+  if (room.phase === 'IN_GAME' || room.phase === 'FINISHED') return fail('INVALID_PHASE');
 
   const seats = room.seats.map((s) => (s.seatId === seatId ? { ...s, ready, lastSeenAt: now } : s));
   return ok({ ...room, seats });
@@ -221,44 +231,71 @@ export function setConnected(room: Room, seatId: SeatId, connected: boolean, now
  * True only for the four team compositions §5.4 allows to start:
  * `(2,2) (2,1) (1,2) (1,1)`. Neither team may be empty or exceed
  * `MAX_TEAM_SIZE`; unassigned seats simply don't count toward either side.
+ *
+ * Takes anything with a `team`, not specifically `Seat[]` — the client's
+ * Team Select screen (T-17) only ever has `PublicSeat[]` (`seatId` stripped
+ * by `redactFor()`) in hand, and this predicate never needed `seatId`.
  */
-export function canStartGame(seats: Seat[]): boolean {
+export function canStartGame(seats: ReadonlyArray<{ team: Team | null }>): boolean {
   const white = seats.filter((s) => s.team === 'WHITE').length;
   const black = seats.filter((s) => s.team === 'BLACK').length;
   return white >= 1 && white <= MAX_TEAM_SIZE && black >= 1 && black <= MAX_TEAM_SIZE;
 }
 
 /**
- * Host-only `start_game` for the 1v1 case (T-14 — "Networked 1v1", the
- * milestone `docs/DESIGN.md` §13 deliberately sequences before Team Select).
- * No FIFA screen exists yet for players to pick sides, so with exactly two
- * seats the join order decides colors: the host is WHITE, the other seat
- * BLACK — matching §4.2's "Team 1 is White" default. `settings.randomizeColors`
- * isn't applied here: `update_settings` isn't wired server-side until T-17
- * (see TASKS.md's T-09 Finding), so it can never actually be `true` yet.
- *
- * `canStartGame`'s four-composition predicate deliberately isn't reused here
- * — every seat's `team` is still `null` at this point (nothing assigns one
- * before this task), and 2v2/2v1 compositions have no propose/accept
- * mechanism to actually play with (T-18). T-17 replaces this whole function
- * with the real team-select-validated transition.
- *
- * No `now` parameter: nothing here is time-derived — `game.clock.turnStartedAt`
- * stays `null` until White's first commit (§4.6), same reasoning T-13 used to
- * drop `now` from `gameEngine.startGame`.
+ * Host-only `LOBBY` -> `TEAM_SELECT` transition (T-17, resolving the
+ * §5.3/§5.4 screen-map ambiguity logged in TASKS.md's Findings): the
+ * Lobby's existing Start button, gated on player count alone since T-10,
+ * now takes the room to the FIFA screen instead of directly into a game.
+ * Same `seats.length >= 2` gate T-10's own Lobby e2e spec already
+ * established ("start is disabled with one player and enabled with two")
+ * — nothing here tightens it, since no seat has a team yet at this point.
  */
-export function startOneVOneGame(room: Room, actorSeatId: SeatId): RoomEngineResult<Room> {
+export function advanceToTeamSelect(room: Room, actorSeatId: SeatId): RoomEngineResult<Room> {
   const actor = room.seats.find((s) => s.seatId === actorSeatId);
   if (!actor) return fail('SEAT_NOT_FOUND');
   if (!actor.isHost) return fail('NOT_HOST');
   if (room.phase !== 'LOBBY') return fail('INVALID_PHASE');
-  if (room.seats.length !== 2) return fail('TEAM_SIZE_INVALID');
+  if (room.seats.length < 2) return fail('TEAM_SIZE_INVALID');
 
-  const [white, black] = room.seats;
-  const seats: Seat[] = [
-    { ...white!, team: 'WHITE' },
-    { ...black!, team: 'BLACK' },
-  ];
+  return ok({ ...room, phase: 'TEAM_SELECT' });
+}
+
+/**
+ * Host-only `TEAM_SELECT` -> `IN_GAME` transition (T-17), replacing T-14's
+ * `startOneVOneGame` now that the FIFA screen exists for players to pick
+ * sides. Requires every seat to hold a team (an "Unassigned" straggler left
+ * on the strip can't sensibly be "ready" to play, so `canStartGame`'s own
+ * "unassigned seats don't count toward either side" — correct for its
+ * narrower job of just validating the two counts — isn't sufficient here on
+ * its own) *and* `canStartGame`'s four-composition check, *and* every seat
+ * `ready` (§5.4: "enabled only when all players are ready and team sizes
+ * are valid").
+ *
+ * `random` is required, not defaulted — rule 1's "no hidden nondeterminism
+ * inside a shared function" applies just as much to `Math.random()` as to
+ * `Date.now()`, so the caller (`RoomDO`) must supply it explicitly, same as
+ * `now` everywhere else. When `settings.randomizeColors` is on, §4.2's "the
+ * server flips a coin at game start" is implemented as swapping every seat's
+ * WHITE/BLACK label — the FIFA panels already *are* literal colors in this
+ * data model (no abstract Team 1/Team 2), so "randomize colors" here means
+ * the colors you picked on the panel aren't necessarily the colors you play.
+ */
+export function startGameFromTeamSelect(
+  room: Room,
+  actorSeatId: SeatId,
+  random: () => number,
+): RoomEngineResult<Room> {
+  const actor = room.seats.find((s) => s.seatId === actorSeatId);
+  if (!actor) return fail('SEAT_NOT_FOUND');
+  if (!actor.isHost) return fail('NOT_HOST');
+  if (room.phase !== 'TEAM_SELECT') return fail('INVALID_PHASE');
+  if (room.seats.some((s) => s.team === null) || !canStartGame(room.seats)) return fail('TEAM_SIZE_INVALID');
+  if (!room.seats.every((s) => s.ready)) return fail('NOT_ALL_READY');
+
+  const flipTeam = (team: Team | null): Team | null => (team === 'WHITE' ? 'BLACK' : team === 'BLACK' ? 'WHITE' : team);
+  const flipColors = room.settings.randomizeColors && random() < 0.5;
+  const seats = flipColors ? room.seats.map((s) => ({ ...s, team: flipTeam(s.team) })) : room.seats;
 
   return ok({
     ...room,
@@ -266,4 +303,28 @@ export function startOneVOneGame(room: Room, actorSeatId: SeatId): RoomEngineRes
     seats,
     game: buildInitialGameState(room.settings.timeControl),
   });
+}
+
+/**
+ * Host-only "Randomize teams" (§5.4) — distinct from `settings.randomizeColors`
+ * above: this reshuffles *who* is on which team, not which team plays which
+ * color. `random` is required, not defaulted, for the same reason as above.
+ * A Fisher-Yates shuffle of the seats, then alternating WHITE/BLACK by
+ * shuffled position, guarantees an always-valid, maximally even split for
+ * any seat count from 2 to 4.
+ */
+export function randomizeTeams(room: Room, actorSeatId: SeatId, random: () => number): RoomEngineResult<Room> {
+  const actor = room.seats.find((s) => s.seatId === actorSeatId);
+  if (!actor) return fail('SEAT_NOT_FOUND');
+  if (!actor.isHost) return fail('NOT_HOST');
+  if (room.phase !== 'TEAM_SELECT') return fail('INVALID_PHASE');
+
+  const shuffled = [...room.seats];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  const teamBySeatId = new Map<SeatId, Team>(shuffled.map((s, i) => [s.seatId, i % 2 === 0 ? 'WHITE' : 'BLACK']));
+
+  return ok({ ...room, seats: room.seats.map((s) => ({ ...s, team: teamBySeatId.get(s.seatId)! })) });
 }

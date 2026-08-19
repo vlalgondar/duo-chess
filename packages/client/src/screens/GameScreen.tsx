@@ -13,7 +13,8 @@ interface GameScreenProps {
  * renders `view.game.fen` as received from the server's `state` broadcast, and a move attempt
  * only ever sends `propose` (via `Board`'s `serverFen`/`onMove`, see its doc comment). The
  * propose/accept UI (ghost piece, arrow, team panel) is T-20's job — this screen is deliberately
- * plain, since with `startOneVOneGame` every team is solo and every legal propose auto-commits.
+ * plain, since every legal `propose` still auto-commits immediately regardless of team size until
+ * T-18's proposal/confirmation state machine lands (see `RoomDO.handlePropose`'s doc comment).
  */
 export function GameScreen({ view, onMove, serverClockOffsetMs }: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);

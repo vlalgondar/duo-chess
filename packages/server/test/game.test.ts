@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { startOneVOneGame } from './gameSetup.js';
 import { spawnRoom } from './harness.js';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -12,9 +13,7 @@ describe('networked 1v1 (T-14)', () => {
     await bob.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 2);
     await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 2);
 
-    alice.send({ t: 'start_game' });
-    await alice.expect('state', (m) => m.phase === 'IN_GAME');
-    await bob.expect('state', (m) => m.phase === 'IN_GAME');
+    await startOneVOneGame(alice, bob);
 
     alice.send({ t: 'propose', from: 'f2', to: 'f3' });
     await alice.expect('move_committed', (m) => m.san === 'f3');
@@ -52,9 +51,7 @@ describe('networked 1v1 (T-14)', () => {
     await bob.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 2);
     await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 2);
 
-    alice.send({ t: 'start_game' });
-    await alice.expect('state', (m) => m.phase === 'IN_GAME');
-    await bob.expect('state', (m) => m.phase === 'IN_GAME');
+    await startOneVOneGame(alice, bob);
 
     // A pawn cannot jump from its start square straight to the fourth rank.
     alice.send({ t: 'propose', from: 'e2', to: 'e5' });

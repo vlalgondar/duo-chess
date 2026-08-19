@@ -3,9 +3,10 @@ import { TIME_CONTROLS, type ClientRoomView, type RoomSettings } from '@duo/shar
 
 // docs/DESIGN.md §5.3 gates Start on "every player has picked a team", but
 // team assignment happens on the later Team Select screen (§5.4) per the
-// §5.1 screen map — no seat has a team yet while still in the Lobby. Gating
-// on player count alone, per this task's own e2e spec; see TASKS.md Findings
-// (the §5.3/§5.4 disagreement) for the team-size gating still owed at T-17.
+// §5.1 screen map — no seat has a team yet while still in the Lobby. As
+// resolved at T-17 (see TASKS.md Findings): this button only advances
+// LOBBY -> TEAM_SELECT, gated on player count alone; the real ready/team-size
+// gate lives on Team Select's own Start Game button (`TeamSelect.tsx`).
 const MIN_PLAYERS_TO_START = 2;
 
 interface LobbyProps {
@@ -102,11 +103,10 @@ function CopyLinkButton({ link }: { link: string }) {
 }
 
 /**
- * `timeControl` is now a live picker over the full §4.6 option list (T-16),
- * same pattern as `allowSpectators`/`randomizeColors`/`disconnectGraceMs`
- * below: the server doesn't yet handle `update_settings` (T-09's Findings;
- * lands at T-17 alongside `set_team`), so a host's edit here is a no-op
- * until then, exactly as harmless as the existing three fields.
+ * `timeControl` is a live picker over the full §4.6 option list (T-16), same
+ * pattern as `allowSpectators`/`randomizeColors`/`disconnectGraceMs` below —
+ * `update_settings` is wired server-side as of T-17, so every edit here now
+ * round-trips and is reflected back in the next `state` broadcast.
  */
 function HostSettings({
   settings,

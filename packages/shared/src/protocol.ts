@@ -101,6 +101,11 @@ export const startGameMessageSchema = withNonce({
   t: z.literal('start_game'),
 });
 
+/** Host-only "Randomize teams" (§5.4) — no payload, `RoomDO` reseats every player. */
+export const randomizeTeamsMessageSchema = withNonce({
+  t: z.literal('randomize_teams'),
+});
+
 export const proposeMessageSchema = withNonce({
   t: z.literal('propose'),
   from: squareSchema,
@@ -186,6 +191,7 @@ export const clientMessageSchema = z.discriminatedUnion('t', [
   setReadyMessageSchema,
   updateSettingsMessageSchema,
   startGameMessageSchema,
+  randomizeTeamsMessageSchema,
   proposeMessageSchema,
   withdrawMessageSchema,
   acceptMessageSchema,
@@ -370,6 +376,7 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'INVALID_MESSAGE',
   'NOT_JOINED',
   'TEAM_SIZE_INVALID',
+  'NOT_ALL_READY',
 ]);
 
 export const errorMessageSchema = z.object({

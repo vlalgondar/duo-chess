@@ -1,21 +1,27 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
+  advanceToTeamSelect,
   commitMove,
   createRoom,
   flagFallDeadline,
   joinRoom,
   parseClientMessage,
+  randomizeTeams,
   redactFor,
   remainingMs,
   resolveTimeout,
   setConnected,
-  startOneVOneGame,
+  setReady,
+  setTeam,
+  startGameFromTeamSelect,
+  updateSettings,
   type ClientRoomView,
   type ErrorCode,
   type GameState,
   type GameStatus,
   type PromotionPiece,
   type Room,
+  type RoomSettings,
   type Seat,
   type Spectator,
   type Square,
@@ -67,11 +73,13 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  *
  * T-09 wires up `join` (issuing `seatId`/`resumeToken`, and reconnection
  * reclaiming a seat by token) plus connect/disconnect tracking. T-14 adds
- * `start_game`/`propose` for the 1v1 case (see `startOneVOneGame` and
- * `handlePropose`). Every other client -> server message type is valid per
- * the wire protocol but has no engine support yet (team select, multi-player
- * accept/reject, chat, ...); deliberately left unhandled here for the tasks
- * that build that machinery.
+ * `propose` (see `handlePropose`). T-17 adds `set_team`/`set_ready`/
+ * `randomize_teams`/`update_settings` and makes `start_game` phase-aware
+ * (LOBBY -> TEAM_SELECT -> IN_GAME, see `handleStartGame`'s doc comment).
+ * Every other client -> server message type is valid per the wire protocol
+ * but has no engine
+ * support yet (multi-player accept/reject, chat, ...); deliberately left
+ * unhandled here for the tasks that build that machinery.
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -144,25 +152,55 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'set_team') {
+      await this.handleSetTeam(ws, attachment.seatId, message.team, message.nonce);
+      return;
+    }
+
+    if (message.t === 'set_ready') {
+      await this.handleSetReady(ws, attachment.seatId, message.ready, message.nonce);
+      return;
+    }
+
+    if (message.t === 'randomize_teams') {
+      await this.handleRandomizeTeams(ws, attachment.seatId, message.nonce);
+      return;
+    }
+
+    if (message.t === 'update_settings') {
+      await this.handleUpdateSettings(ws, attachment.seatId, message.settings, message.nonce);
+      return;
+    }
+
     if (message.t === 'propose') {
       await this.handlePropose(ws, attachment.seatId, message.from, message.to, message.promotion, message.nonce);
       return;
     }
 
     // Every other message type is real wire protocol but has no engine
-    // behind it yet — later tasks (team select, accept/reject/withdraw for
-    // multi-player teams, chat, ...) add the handling as their own
-    // machinery lands.
+    // behind it yet — later tasks (accept/reject/withdraw for multi-player
+    // teams, chat, ...) add the handling as their own machinery lands.
   }
 
-  /** T-14: 1v1 only — see `startOneVOneGame`'s doc comment for why. */
+  /**
+   * `start_game` does double duty across the two phases it can fire from
+   * (T-17, resolving the §5.3/§5.4 screen-map ambiguity — TASKS.md
+   * Findings): from `LOBBY` it's the existing T-10 Lobby "Start" button,
+   * now advancing to the FIFA screen (`advanceToTeamSelect`) instead of
+   * directly into a game; from `TEAM_SELECT` it's that screen's own "Start
+   * Game" button, validated by `startGameFromTeamSelect`. No new wire
+   * message needed — same button-press semantics either room state answers.
+   */
   private async handleStartGame(ws: WebSocket, seatId: string, nonce?: string): Promise<void> {
     if (!this.room) {
       this.sendError(ws, 'INVALID_PHASE', 'no room to start', nonce);
       return;
     }
 
-    const result = startOneVOneGame(this.room, seatId);
+    const result =
+      this.room.phase === 'TEAM_SELECT'
+        ? startGameFromTeamSelect(this.room, seatId, Math.random)
+        : advanceToTeamSelect(this.room, seatId);
     if (!result.ok) {
       this.sendError(ws, result.code, result.code, nonce);
       return;
@@ -171,17 +209,87 @@ export class RoomDO extends DurableObject {
     this.room = result.value;
     await this.persist();
     await this.broadcastState();
-    this.broadcastClockSync();
-    await this.scheduleAlarm();
+    if (this.room.phase === 'IN_GAME') {
+      this.broadcastClockSync();
+      await this.scheduleAlarm();
+    }
+  }
+
+  private async handleSetTeam(ws: WebSocket, seatId: string, team: Team | null, nonce?: string): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = setTeam(this.room, seatId, team, Date.now());
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
+  }
+
+  private async handleSetReady(ws: WebSocket, seatId: string, ready: boolean, nonce?: string): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = setReady(this.room, seatId, ready, Date.now());
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
+  }
+
+  /** Host-only, full replacement of `settings` (§7). Scaffolded client-side since T-10; unwired server-side until now. */
+  private async handleUpdateSettings(
+    ws: WebSocket,
+    seatId: string,
+    settings: RoomSettings,
+    nonce?: string,
+  ): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = updateSettings(this.room, seatId, settings);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
+  }
+
+  private async handleRandomizeTeams(ws: WebSocket, seatId: string, nonce?: string): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = randomizeTeams(this.room, seatId, Math.random);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
   }
 
   /**
-   * `propose` for a 1v1 game (T-14): every team is solo by construction
-   * (`startOneVOneGame` never assigns two players to one side), so there's
-   * no one to confirm with — `commitMove` applies immediately, matching
-   * §4.4's "solo team ... propose() immediately followed by an internal
-   * auto-commit, so there's exactly one code path for applying moves."
-   * The 2-player proposal slot (versioned, pending accept/reject) is T-18.
+   * `propose` auto-commits immediately for every team (T-14). That was
+   * exactly right when every team was solo by construction (§4.4's "solo
+   * team ... propose() immediately followed by an internal auto-commit").
+   * Team Select (T-17) can now seat two players on one side, but the
+   * confirmation gate for that case — a real proposal slot, requiring the
+   * teammate to `accept` — is T-18's job specifically, not this task's; see
+   * TASKS.md's T-17 Findings for why a 2v2/2v1 game is reachable before
+   * T-18 lands and what that means until it does.
    */
   private async handlePropose(
     ws: WebSocket,

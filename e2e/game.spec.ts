@@ -20,7 +20,25 @@ test('two contexts play four scripted moves and both boards match', async ({ bro
     await guestPage.getByTestId('join-button').click();
 
     await expect(hostPage.getByTestId('start-button')).toBeEnabled();
-    await hostPage.getByTestId('start-button').click();
+    await hostPage.getByTestId('start-button').click(); // LOBBY -> TEAM_SELECT
+
+    // T-17: pick sides, ready up, and have the host start the actual game.
+    await expect(hostPage.getByTestId('team-select-shell')).toBeVisible();
+    await expect(guestPage.getByTestId('team-select-shell')).toBeVisible();
+
+    await hostPage.locator('[data-testid="team-card"][data-username="alice"] [data-testid="move-left"]').click();
+    await guestPage.locator('[data-testid="team-card"][data-username="bob"] [data-testid="move-right"]').click();
+    await expect(
+      hostPage.locator('[data-testid="team-panel-white"] [data-testid="team-card"][data-username="alice"]'),
+    ).toBeVisible();
+    await expect(
+      guestPage.locator('[data-testid="team-panel-black"] [data-testid="team-card"][data-username="bob"]'),
+    ).toBeVisible();
+
+    await hostPage.locator('[data-testid="team-card"][data-username="alice"] [data-testid="ready-toggle"]').click();
+    await guestPage.locator('[data-testid="team-card"][data-username="bob"] [data-testid="ready-toggle"]').click();
+    await expect(hostPage.getByTestId('start-game-button')).toBeEnabled();
+    await hostPage.getByTestId('start-game-button').click(); // TEAM_SELECT -> IN_GAME
 
     const hostFen = hostPage.getByTestId('fen');
     const guestFen = guestPage.getByTestId('fen');

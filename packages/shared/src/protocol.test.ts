@@ -19,6 +19,7 @@ import {
   promoteSpectatorMessageSchema,
   proposalUpdateMessageSchema,
   proposeMessageSchema,
+  randomizeTeamsMessageSchema,
   rejectMessageSchema,
   setReadyMessageSchema,
   setTeamMessageSchema,
@@ -149,6 +150,12 @@ const CLIENT_CASES: Case[] = [
     schema: startGameMessageSchema,
     valid: { t: 'start_game' },
     invalid: { t: 'start_gam' },
+  },
+  {
+    name: 'randomize_teams',
+    schema: randomizeTeamsMessageSchema,
+    valid: { t: 'randomize_teams' },
+    invalid: { t: 'randomize_team' },
   },
   {
     name: 'propose',

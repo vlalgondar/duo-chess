@@ -1,1 +1,13 @@
 @import 'tailwindcss';
+
+/* §5.4: "Attempting to join a full team is refused with a small shake animation." */
+@keyframes team-select-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+
+.shake {
+  animation: team-select-shake 0.4s ease-in-out;
+}

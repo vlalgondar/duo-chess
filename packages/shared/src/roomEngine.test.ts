@@ -3,19 +3,21 @@ import {
   DEFAULT_ROOM_SETTINGS,
   MAX_SEATS,
   MAX_SPECTATORS,
+  advanceToTeamSelect,
   canStartGame,
   createRoom,
   joinRoom,
   leaveRoom,
   promoteSpectator,
+  randomizeTeams,
   setConnected,
   setReady,
   setTeam,
-  startOneVOneGame,
+  startGameFromTeamSelect,
   updateSettings,
 } from './roomEngine.js';
 import type { RoomJoiner } from './roomEngine.js';
-import type { Room, Seat } from './types.js';
+import type { Room, Seat, Team } from './types.js';
 
 const NOW = 1_000;
 
@@ -190,6 +192,14 @@ describe('setTeam', () => {
     const result = setTeam(roomWithHost(), 'nobody', 'WHITE', NOW);
     expect(result).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
   });
+
+  it.each(['IN_GAME', 'FINISHED'] as const)(
+    'rejects with INVALID_PHASE once the room is %s — a mid-game team hop must not let someone move the wrong side',
+    (phase) => {
+      const room: Room = { ...roomWithSeats(2), phase };
+      expect(setTeam(room, 'seat-0', 'WHITE', NOW)).toEqual({ ok: false, code: 'INVALID_PHASE' });
+    },
+  );
 });
 
 describe('setReady', () => {
@@ -205,6 +215,11 @@ describe('setReady', () => {
   it('returns SEAT_NOT_FOUND for an unknown seatId', () => {
     const result = setReady(roomWithHost(), 'nobody', true, NOW);
     expect(result).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+
+  it.each(['IN_GAME', 'FINISHED'] as const)('rejects with INVALID_PHASE once the room is %s', (phase) => {
+    const room: Room = { ...roomWithHost(), phase };
+    expect(setReady(room, 'seat-0', true, NOW)).toEqual({ ok: false, code: 'INVALID_PHASE' });
   });
 });
 
@@ -323,10 +338,61 @@ describe('canStartGame', () => {
   });
 });
 
-describe('startOneVOneGame', () => {
-  it('assigns the host WHITE, the other seat BLACK, and builds the initial game state', () => {
+describe('advanceToTeamSelect', () => {
+  it('moves a LOBBY room to TEAM_SELECT without touching seats', () => {
     const room = roomWithSeats(2);
-    const result = startOneVOneGame(room, 'seat-0');
+    const result = advanceToTeamSelect(room, 'seat-0');
+    if (!result.ok) throw new Error('expected success');
+
+    expect(result.value.phase).toBe('TEAM_SELECT');
+    expect(result.value.seats).toEqual(room.seats);
+  });
+
+  it('rejects a non-host actor', () => {
+    expect(advanceToTeamSelect(roomWithSeats(2), 'seat-1')).toEqual({ ok: false, code: 'NOT_HOST' });
+  });
+
+  it('rejects an unknown seat', () => {
+    expect(advanceToTeamSelect(roomWithSeats(2), 'nope')).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+
+  it('rejects a single-player room', () => {
+    expect(advanceToTeamSelect(roomWithSeats(1), 'seat-0')).toEqual({ ok: false, code: 'TEAM_SIZE_INVALID' });
+  });
+
+  it('rejects starting outside the LOBBY phase', () => {
+    const teamSelect = advanceToTeamSelect(roomWithSeats(2), 'seat-0');
+    if (!teamSelect.ok) throw new Error('setup expected success');
+    expect(advanceToTeamSelect(teamSelect.value, 'seat-0')).toEqual({ ok: false, code: 'INVALID_PHASE' });
+  });
+});
+
+describe('startGameFromTeamSelect', () => {
+  /** `random()` that never flips colors (>= 0.5) — the common case for tests not about the coin flip itself. */
+  const noFlip = () => 1;
+
+  /** A TEAM_SELECT room with every seat assigned via `setTeam` and marked ready. */
+  function readyTeamSelectRoom(teams: (Team | null)[]): Room {
+    let room = roomWithSeats(teams.length);
+    const advanced = advanceToTeamSelect(room, 'seat-0');
+    if (!advanced.ok) throw new Error('setup expected success');
+    room = advanced.value;
+
+    teams.forEach((team, i) => {
+      if (team === null) return;
+      const result = setTeam(room, `seat-${i}`, team, NOW);
+      if (!result.ok) throw new Error('setup expected success');
+      room = result.value;
+    });
+    return {
+      ...room,
+      seats: room.seats.map((s) => ({ ...s, ready: true })),
+    };
+  }
+
+  it('starts a 1v1 game once both seats are on a team and ready', () => {
+    const room = readyTeamSelectRoom(['WHITE', 'BLACK']);
+    const result = startGameFromTeamSelect(room, 'seat-0', noFlip);
     if (!result.ok) throw new Error('expected success');
 
     expect(result.value.phase).toBe('IN_GAME');
@@ -341,31 +407,107 @@ describe('startOneVOneGame', () => {
     });
   });
 
+  it.each([
+    ['2v2', ['WHITE', 'WHITE', 'BLACK', 'BLACK']],
+    ['2v1', ['WHITE', 'WHITE', 'BLACK']],
+    ['1v2', ['WHITE', 'BLACK', 'BLACK']],
+  ] as const)('starts a %s game', (_label, teams) => {
+    const result = startGameFromTeamSelect(readyTeamSelectRoom([...teams]), 'seat-0', noFlip);
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a non-host actor', () => {
+    expect(startGameFromTeamSelect(readyTeamSelectRoom(['WHITE', 'BLACK']), 'seat-1', noFlip)).toEqual({
+      ok: false,
+      code: 'NOT_HOST',
+    });
+  });
+
+  it('rejects outside the TEAM_SELECT phase', () => {
+    expect(startGameFromTeamSelect(roomWithSeats(2), 'seat-0', noFlip)).toEqual({ ok: false, code: 'INVALID_PHASE' });
+  });
+
+  it('rejects an invalid team composition (everyone crowded onto one side, the other empty)', () => {
+    // Only 2v0 is reachable through legitimate `setTeam` calls — `setTeam`
+    // itself already refuses a third player onto a full team (TEAM_FULL),
+    // so 3v0/4v0 can never actually happen this way.
+    const room = readyTeamSelectRoom(['WHITE', 'WHITE']);
+    expect(startGameFromTeamSelect(room, 'seat-0', noFlip)).toEqual({ ok: false, code: 'TEAM_SIZE_INVALID' });
+  });
+
+  it('rejects a straggler still sitting Unassigned, even if the two counted teams are valid', () => {
+    const room = readyTeamSelectRoom(['WHITE', 'BLACK', null]);
+    expect(startGameFromTeamSelect(room, 'seat-0', noFlip)).toEqual({ ok: false, code: 'TEAM_SIZE_INVALID' });
+  });
+
+  it('rejects when not every seat is ready', () => {
+    const ready = readyTeamSelectRoom(['WHITE', 'BLACK']);
+    const notReady = { ...ready, seats: ready.seats.map((s, i) => (i === 1 ? { ...s, ready: false } : s)) };
+    expect(startGameFromTeamSelect(notReady, 'seat-0', noFlip)).toEqual({ ok: false, code: 'NOT_ALL_READY' });
+  });
+
+  describe('randomizeColors (§4.2)', () => {
+    function readyRoomWithRandomizeColors(): Room {
+      const room = readyTeamSelectRoom(['WHITE', 'BLACK']);
+      return { ...room, settings: { ...room.settings, randomizeColors: true } };
+    }
+
+    it('leaves colors alone when the coin flip lands >= 0.5', () => {
+      const result = startGameFromTeamSelect(readyRoomWithRandomizeColors(), 'seat-0', () => 0.5);
+      if (!result.ok) throw new Error('expected success');
+      expect(result.value.seats.map((s) => [s.seatId, s.team])).toEqual([
+        ['seat-0', 'WHITE'],
+        ['seat-1', 'BLACK'],
+      ]);
+    });
+
+    it('swaps every seat\'s WHITE/BLACK label when the coin flip lands < 0.5', () => {
+      const result = startGameFromTeamSelect(readyRoomWithRandomizeColors(), 'seat-0', () => 0.1);
+      if (!result.ok) throw new Error('expected success');
+      expect(result.value.seats.map((s) => [s.seatId, s.team])).toEqual([
+        ['seat-0', 'BLACK'],
+        ['seat-1', 'WHITE'],
+      ]);
+    });
+
+    it('never flips when settings.randomizeColors is off, regardless of the coin flip', () => {
+      const result = startGameFromTeamSelect(readyTeamSelectRoom(['WHITE', 'BLACK']), 'seat-0', () => 0.1);
+      if (!result.ok) throw new Error('expected success');
+      expect(result.value.seats.map((s) => [s.seatId, s.team])).toEqual([
+        ['seat-0', 'WHITE'],
+        ['seat-1', 'BLACK'],
+      ]);
+    });
+  });
+});
+
+describe('randomizeTeams', () => {
+  function fixedRandom(...values: number[]): () => number {
+    let i = 0;
+    return () => values[i++ % values.length]!;
+  }
+
+  it.each([2, 3, 4])('produces a valid, fully-assigned composition for %i seats', (count) => {
+    const room = roomWithSeats(count);
+    const teamSelect = advanceToTeamSelect(room, 'seat-0');
+    if (!teamSelect.ok) throw new Error('setup expected success');
+
+    const result = randomizeTeams(teamSelect.value, 'seat-0', fixedRandom(0.1, 0.9, 0.5));
+    if (!result.ok) throw new Error('expected success');
+
+    expect(result.value.seats.every((s) => s.team !== null)).toBe(true);
+    expect(canStartGame(result.value.seats)).toBe(true);
+  });
+
   it('rejects a non-host actor', () => {
     const room = roomWithSeats(2);
-    expect(startOneVOneGame(room, 'seat-1')).toEqual({ ok: false, code: 'NOT_HOST' });
+    const teamSelect = advanceToTeamSelect(room, 'seat-0');
+    if (!teamSelect.ok) throw new Error('setup expected success');
+    expect(randomizeTeams(teamSelect.value, 'seat-1', fixedRandom(0))).toEqual({ ok: false, code: 'NOT_HOST' });
   });
 
-  it('rejects an unknown seat', () => {
-    const room = roomWithSeats(2);
-    expect(startOneVOneGame(room, 'nope')).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
-  });
-
-  it('rejects starting outside the LOBBY phase', () => {
-    const room = roomWithSeats(2);
-    const started = startOneVOneGame(room, 'seat-0');
-    if (!started.ok) throw new Error('setup expected success');
-
-    expect(startOneVOneGame(started.value, 'seat-0')).toEqual({ ok: false, code: 'INVALID_PHASE' });
-  });
-
-  it.each([
-    ['one seat', 1],
-    ['three seats', 3],
-    ['four seats', 4],
-  ])('rejects with %s (not exactly 1v1)', (_label, count) => {
-    const room = roomWithSeats(count);
-    expect(startOneVOneGame(room, 'seat-0')).toEqual({ ok: false, code: 'TEAM_SIZE_INVALID' });
+  it('rejects outside the TEAM_SELECT phase', () => {
+    expect(randomizeTeams(roomWithSeats(2), 'seat-0', fixedRandom(0))).toEqual({ ok: false, code: 'INVALID_PHASE' });
   });
 });
 

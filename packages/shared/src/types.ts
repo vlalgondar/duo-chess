@@ -176,9 +176,10 @@ export interface ClientRoomView {
  * come up rather than treated as closed. `INVALID_MESSAGE` (malformed JSON or
  * a schema rejection) and `NOT_JOINED` (any message before `join` completes)
  * are the transport-level rejections added by the Durable Object (T-09).
- * `TEAM_SIZE_INVALID` is `start_game`'s rejection (T-14) when the room isn't
- * exactly two seats — Team Select (T-17) doesn't exist yet, so `start_game`
- * only supports the 1v1 case for now.
+ * `TEAM_SIZE_INVALID` is `start_game`'s rejection when team composition
+ * isn't one of §5.4's four valid shapes (or a seat is still Unassigned).
+ * `NOT_ALL_READY` is T-17's other `start_game`-from-`TEAM_SELECT` rejection:
+ * a valid composition where not every seat has toggled Ready yet.
  */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
@@ -195,4 +196,5 @@ export type ErrorCode =
   | 'INVALID_PHASE'
   | 'INVALID_MESSAGE'
   | 'NOT_JOINED'
-  | 'TEAM_SIZE_INVALID';
+  | 'TEAM_SIZE_INVALID'
+  | 'NOT_ALL_READY';
