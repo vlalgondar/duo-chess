@@ -43,6 +43,26 @@ interface LastMove {
   to: Square;
 }
 
+/**
+ * `docs/DESIGN.md` §5.5 "Proposal visuals": a translucent ghost piece on the
+ * destination square plus a solid arrow, in the team's accent color. Unicode
+ * glyphs rather than the library's own piece images — `react-chessboard`
+ * doesn't expose its piece SVGs for reuse outside `position` (same "public
+ * entry point only" precedent T-11 already established for this library).
+ */
+export interface ProposalOverlay {
+  from: Square;
+  to: Square;
+  promotion?: PromotionPiece | undefined;
+  /** CSS color for the arrow/ghost — the proposing team's accent (§5.9: "in your team's accent color"). */
+  accentColor: string;
+}
+
+const GHOST_GLYPHS: Record<'w' | 'b', Record<'p' | 'n' | 'b' | 'r' | 'q' | 'k', string>> = {
+  w: { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕', k: '♔' },
+  b: { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' },
+};
+
 interface PendingPromotion {
   from: Square;
   to: Square;
@@ -62,7 +82,11 @@ interface SquareContentProps {
  * `ref` under `exactOptionalPropertyTypes`, which is a typing gap in the library, not a real
  * incompatibility in the props actually passed at runtime.
  */
-function makeSquareContent(dotSquares: Set<Square>, ringSquares: Set<Square>) {
+function makeSquareContent(
+  dotSquares: Set<Square>,
+  ringSquares: Set<Square>,
+  ghost: { square: Square; glyph: string; accentColor: string } | null,
+) {
   const SquareContent = forwardRef<HTMLDivElement, SquareContentProps>(function SquareContent(
     { children, square, style },
     ref,
@@ -72,10 +96,38 @@ function makeSquareContent(dotSquares: Set<Square>, ringSquares: Set<Square>) {
         {children}
         {dotSquares.has(square as Square) && <div data-testid="legal-dot" style={DOT_STYLE} />}
         {ringSquares.has(square as Square) && <div data-testid="legal-ring" style={RING_STYLE} />}
+        {ghost && ghost.square === square && (
+          <div
+            data-testid="proposal-ghost"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '250%',
+              lineHeight: 1,
+              color: ghost.accentColor,
+              opacity: 0.55,
+              pointerEvents: 'none',
+            }}
+          >
+            {ghost.glyph}
+          </div>
+        )}
       </div>
     );
   });
   return SquareContent as unknown as (props: SquareContentProps) => ReactNode;
+}
+
+/** Center of `square`'s cell as a percentage of the board, accounting for orientation. */
+function squareCenterPercent(square: Square, orientation: 'white' | 'black'): { x: number; y: number } {
+  const file = square.charCodeAt(0) - 'a'.charCodeAt(0); // 0-7, a=0
+  const rank = Number(square[1]) - 1; // 0-7, rank 1 = 0
+  const col = orientation === 'white' ? file : 7 - file;
+  const row = orientation === 'white' ? 7 - rank : rank; // rank 8 at the top when white is at the bottom
+  return { x: (col + 0.5) * 12.5, y: (row + 0.5) * 12.5 };
 }
 
 interface BoardProps {
@@ -92,6 +144,15 @@ interface BoardProps {
    */
   serverFen?: string;
   onMove?: ((from: Square, to: Square, promotion?: PromotionPiece) => void) | undefined;
+  /**
+   * T-20: when true (off-turn, per §5.5 "pieces are not draggable"), no square can be
+   * selected and no piece can be dragged — the server would reject the move anyway
+   * (`NOT_YOUR_TURN`), but the design wants that reflected in the board itself, not just
+   * an error round trip.
+   */
+  locked?: boolean;
+  /** T-20: the viewer's own team's live proposal, rendered as a ghost piece + arrow (§5.5). */
+  proposal?: ProposalOverlay | null;
 }
 
 function createGame(fen: string): Chess {
@@ -120,6 +181,8 @@ export function Board({
   sizeClassName = 'mx-auto w-full max-w-[640px]',
   serverFen,
   onMove,
+  locked = false,
+  proposal = null,
 }: BoardProps) {
   const networked = serverFen !== undefined;
   const gameRef = useRef(createGame(serverFen ?? initialFen));
@@ -167,7 +230,24 @@ export function Board({
     return styles;
   }, [selected, lastMove, checkSquare]);
 
-  const SquareContent = useMemo(() => makeSquareContent(dotSquares, ringSquares), [dotSquares, ringSquares]);
+  const ghost = useMemo(() => {
+    if (!proposal) return null;
+    const piece = game.get(proposal.from);
+    if (!piece) return null;
+    const type = proposal.promotion ?? piece.type;
+    return { square: proposal.to, glyph: GHOST_GLYPHS[piece.color][type], accentColor: proposal.accentColor };
+  }, [proposal, game, fen]);
+
+  const SquareContent = useMemo(() => makeSquareContent(dotSquares, ringSquares, ghost), [dotSquares, ringSquares, ghost]);
+
+  const arrow = useMemo(() => {
+    if (!proposal) return null;
+    return {
+      from: squareCenterPercent(proposal.from, orientation),
+      to: squareCenterPercent(proposal.to, orientation),
+      accentColor: proposal.accentColor,
+    };
+  }, [proposal, orientation]);
 
   function commitMove(from: Square, to: Square, promotion?: PromotionPiece): boolean {
     if (networked) {
@@ -205,7 +285,7 @@ export function Board({
   }
 
   function handleSquareClick(square: string, piece: string | undefined) {
-    if (pendingPromotion) return;
+    if (pendingPromotion || locked) return;
     const clicked = square as Square;
     if (selected && (dotSquares.has(clicked) || ringSquares.has(clicked))) {
       attemptMove(selected, clicked);
@@ -215,7 +295,7 @@ export function Board({
   }
 
   function handlePieceDrop(sourceSquare: string, targetSquare: string): boolean {
-    if (pendingPromotion) return false;
+    if (pendingPromotion || locked) return false;
     return attemptMove(sourceSquare as Square, targetSquare as Square);
   }
 
@@ -234,7 +314,34 @@ export function Board({
         onPromotionCheck={() => false}
         customSquare={SquareContent}
         customSquareStyles={customSquareStyles}
+        arePiecesDraggable={!locked}
       />
+
+      {arrow && (
+        <svg
+          data-testid="proposal-arrow"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="pointer-events-none absolute inset-0 z-10"
+        >
+          <defs>
+            <marker id="proposal-arrowhead" markerWidth="4" markerHeight="4" refX="2.4" refY="2" orient="auto">
+              <path d="M0,0 L4,2 L0,4 Z" fill={arrow.accentColor} />
+            </marker>
+          </defs>
+          <line
+            x1={arrow.from.x}
+            y1={arrow.from.y}
+            x2={arrow.to.x}
+            y2={arrow.to.y}
+            stroke={arrow.accentColor}
+            strokeWidth={1.6}
+            strokeLinecap="round"
+            opacity={0.85}
+            markerEnd="url(#proposal-arrowhead)"
+          />
+        </svg>
+      )}
 
       {pendingPromotion && (
         <div

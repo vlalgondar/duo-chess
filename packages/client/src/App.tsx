@@ -108,6 +108,18 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'propose', from, to, promotion });
   };
 
+  const handleAccept = (proposalId: string) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'accept', proposalId });
+  };
+
+  const handleReject = (proposalId: string) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'reject', proposalId });
+  };
+
+  const handleWithdraw = (proposalId: string) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'withdraw', proposalId });
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -124,7 +136,16 @@ export function App() {
   }
 
   if (view.phase === 'IN_GAME') {
-    return <GameScreen view={view} onMove={handleMove} serverClockOffsetMs={serverClockOffsetMs} />;
+    return (
+      <GameScreen
+        view={view}
+        onMove={handleMove}
+        onAccept={handleAccept}
+        onReject={handleReject}
+        onWithdraw={handleWithdraw}
+        serverClockOffsetMs={serverClockOffsetMs}
+      />
+    );
   }
 
   if (view.phase === 'TEAM_SELECT') {

@@ -1,24 +1,39 @@
-import type { ClientRoomView, PromotionPiece, Square } from '@duo/shared';
-import { Board } from '../components/Board.js';
+import { connectedTeamSize, requiresConfirmation, type ClientRoomView, type PromotionPiece, type Square } from '@duo/shared';
+import { Board, type ProposalOverlay } from '../components/Board.js';
+import { BottomSheet } from '../components/BottomSheet.js';
 import { Clock } from '../components/Clock.js';
+import { TeamPanel } from '../components/TeamPanel.js';
 
 interface GameScreenProps {
   view: ClientRoomView;
   onMove: (from: Square, to: Square, promotion?: PromotionPiece) => void;
+  onAccept: (proposalId: string) => void;
+  onReject: (proposalId: string) => void;
+  onWithdraw: (proposalId: string) => void;
   serverClockOffsetMs: number;
 }
 
+// docs/DESIGN.md §5.9's "team's accent color" — one color per team (not per teammate; that
+// distinction is T-22's annotation colors), used for both the proposal ghost piece and arrow.
+const TEAM_ACCENT: Record<'WHITE' | 'BLACK', string> = { WHITE: '#38bdf8', BLACK: '#c084fc' };
+
+// Same §5.10 formula BoardScreen's sandbox uses — see that file's comment for why the 220px
+// deduction exists (bottom-sheet peeked height + flip-button headroom below 900px).
+const BOARD_SIZE_CLASSNAME =
+  'mx-auto w-[min(100vw,calc(100dvh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[560px]';
+
 /**
- * Networked game screen (T-14 — "Networked 1v1"). No optimistic commit: the board always
- * renders `view.game.fen` as received from the server's `state` broadcast, and a move attempt
- * only ever sends `propose` (via `Board`'s `serverFen`/`onMove`, see its doc comment). The
- * propose/accept UI (ghost piece, arrow, team panel) is T-20's job — this screen is deliberately
- * plain, since every legal `propose` still auto-commits immediately regardless of team size until
- * T-18's proposal/confirmation state machine lands (see `RoomDO.handlePropose`'s doc comment).
+ * Networked game screen (T-14, propose/accept UI wired up in T-20). No optimistic commit: the
+ * board always renders `view.game.fen` as received from the server's `state` broadcast, and a
+ * move attempt only ever sends `propose` (via `Board`'s `serverFen`/`onMove`). Below 900px the
+ * team panel lives in the same `BottomSheet` T-12 built for the local sandbox; at/above it, a
+ * static side panel next to the board — the exact §5.10/§5.5 split, now with live data instead
+ * of `BoardScreen`'s disabled placeholder.
  */
-export function GameScreen({ view, onMove, serverClockOffsetMs }: GameScreenProps) {
+export function GameScreen({ view, onMove, onAccept, onReject, onWithdraw, serverClockOffsetMs }: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
-  const orientation = you?.team === 'BLACK' ? 'black' : 'white';
+  const yourTeam = you?.team ?? null;
+  const orientation = yourTeam === 'BLACK' ? 'black' : 'white';
   const game = view.game;
 
   if (!game) {
@@ -29,9 +44,25 @@ export function GameScreen({ view, onMove, serverClockOffsetMs }: GameScreenProp
     );
   }
 
+  const isYourTurn = yourTeam !== null && yourTeam === game.sideToMove;
+  const locked = game.status !== 'ACTIVE' || !isYourTurn;
+
+  const teamSize = yourTeam ? connectedTeamSize(view.seats, yourTeam) : 0;
+  const needsConfirmation = yourTeam !== null && requiresConfirmation(teamSize);
+
+  const proposal = view.proposal;
+  const isProposer = proposal?.by === view.you;
+  const proposerUsername = proposal ? view.seats.find((s) => s.publicId === proposal.by)?.username : undefined;
+  const teammateUsername = view.seats.find((s) => s.team === yourTeam && s.publicId !== view.you)?.username;
+
+  const boardProposal: ProposalOverlay | null =
+    proposal && yourTeam
+      ? { from: proposal.from, to: proposal.to, promotion: proposal.promotion, accentColor: TEAM_ACCENT[yourTeam] }
+      : null;
+
   const statusText =
     game.status === 'ACTIVE'
-      ? you?.team === game.sideToMove
+      ? isYourTurn
         ? 'Your move'
         : "Opponent's move"
       : `Game over — ${game.status}${game.winner ? ` (${game.winner} wins)` : ''}`;
@@ -41,38 +72,60 @@ export function GameScreen({ view, onMove, serverClockOffsetMs }: GameScreenProp
   const top = orientation === 'white' ? 'BLACK' : 'WHITE';
   const bottom = orientation === 'white' ? 'WHITE' : 'BLACK';
 
+  const teamPanelProps = {
+    proposal,
+    isProposer,
+    proposerUsername,
+    teammateUsername,
+    requiresConfirmation: needsConfirmation,
+    serverClockOffsetMs,
+    onAccept,
+    onReject,
+    onWithdraw,
+  };
+
   return (
     <main
       data-testid="game-shell"
-      className="flex min-h-dvh flex-col items-center gap-4 bg-slate-950 p-6 text-slate-100"
+      className="flex min-h-dvh flex-col bg-slate-950 text-slate-100 min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
     >
-      <p data-testid="game-status" className="text-sm text-slate-400">
-        {statusText}
-      </p>
-      {showClocks && (
-        <Clock
-          clock={game.clock}
-          team={top}
-          sideToMove={game.sideToMove}
-          serverClockOffsetMs={serverClockOffsetMs}
-          active={game.status === 'ACTIVE' && game.sideToMove === top}
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:p-0">
+        <p data-testid="game-status" className="text-sm text-slate-400">
+          {statusText}
+        </p>
+        {showClocks && (
+          <Clock
+            clock={game.clock}
+            team={top}
+            sideToMove={game.sideToMove}
+            serverClockOffsetMs={serverClockOffsetMs}
+            active={game.status === 'ACTIVE' && game.sideToMove === top}
+          />
+        )}
+        <Board
+          serverFen={game.fen}
+          orientation={orientation}
+          onMove={locked ? undefined : onMove}
+          locked={locked}
+          proposal={boardProposal}
+          sizeClassName={BOARD_SIZE_CLASSNAME}
         />
-      )}
-      <Board
-        serverFen={game.fen}
-        orientation={orientation}
-        onMove={game.status === 'ACTIVE' ? onMove : undefined}
-        sizeClassName="mx-auto w-full max-w-[560px]"
-      />
-      {showClocks && (
-        <Clock
-          clock={game.clock}
-          team={bottom}
-          sideToMove={game.sideToMove}
-          serverClockOffsetMs={serverClockOffsetMs}
-          active={game.status === 'ACTIVE' && game.sideToMove === bottom}
-        />
-      )}
+        {showClocks && (
+          <Clock
+            clock={game.clock}
+            team={bottom}
+            sideToMove={game.sideToMove}
+            serverClockOffsetMs={serverClockOffsetMs}
+            active={game.status === 'ACTIVE' && game.sideToMove === bottom}
+          />
+        )}
+      </div>
+
+      <aside data-testid="side-panel" className="hidden w-72 flex-col rounded-lg bg-slate-900 min-[900px]:flex">
+        <TeamPanel {...teamPanelProps} />
+      </aside>
+
+      <BottomSheet teamPanel={teamPanelProps} />
     </main>
   );
 }

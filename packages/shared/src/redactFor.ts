@@ -43,8 +43,15 @@ function toWireTeamVote(vote: TeamVote): WireTeamVote {
   return { ...vote, agreedSeats: [...vote.agreedSeats] };
 }
 
-/** `by` is server-internal (§10); the wire form identifies the proposer by publicId instead. */
-function toWireProposal(room: Room, proposal: Proposal): WireProposal {
+/**
+ * `by` is server-internal (§10); the wire form identifies the proposer by
+ * publicId instead. Exported (not just used by `redactFor` itself) so
+ * `RoomDO`'s team-scoped `proposal_update` broadcast (T-20) can build the
+ * same wire shape without a second seatId->publicId lookup — this is still
+ * the one function that knows how to do that translation, just called from
+ * two broadcast paths instead of one.
+ */
+export function toWireProposal(room: Room, proposal: Proposal): WireProposal {
   const proposer = room.seats.find((s) => s.seatId === proposal.by);
   const { by: _by, ...rest } = proposal;
   return { ...rest, by: proposer?.publicId ?? '' };

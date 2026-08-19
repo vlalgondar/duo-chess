@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { TeamPanel } from './TeamPanel.js';
 
 type Tab = 'moves' | 'chat' | 'players';
@@ -6,13 +6,18 @@ type Tab = 'moves' | 'chat' | 'players';
 const TABS: readonly Tab[] = ['moves', 'chat', 'players'];
 const TAB_LABELS: Record<Tab, string> = { moves: 'Moves', chat: 'Chat', players: 'Players' };
 
+interface BottomSheetProps {
+  /** Forwarded verbatim to `TeamPanel` — omitted by the local sandbox (`BoardScreen`), wired by `GameScreen` (T-20). */
+  teamPanel?: ComponentProps<typeof TeamPanel>;
+}
+
 /**
  * `docs/DESIGN.md` §5.10's mobile bottom sheet: team panel pinned above the tabs so
  * Accept/Reject stay reachable while peeked, expanding to ~60% height to reveal the
  * Moves/Chat/Players tabs. Content behind each tab is still owed by later tasks (move
  * list, chat, roster) — same "shell now, wire the data later" split as `TeamPanel`.
  */
-export function BottomSheet() {
+export function BottomSheet({ teamPanel }: BottomSheetProps) {
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('moves');
 
@@ -21,7 +26,11 @@ export function BottomSheet() {
       data-testid="bottom-sheet"
       data-expanded={expanded}
       className={`fixed inset-x-0 bottom-0 z-10 flex flex-col rounded-t-xl bg-slate-900 shadow-lg min-[900px]:hidden ${
-        expanded ? 'h-[60vh]' : 'h-[120px]'
+        // Peeked is `min-h`, not a fixed `h`, so a live proposal's taller content (SAN +
+        // three buttons vs. the one-line placeholder) grows the sheet instead of pushing
+        // Accept/Reject below the fixed-position box and out of the viewport (§5.10:
+        // "pinned above the tabs so Accept/Reject is always reachable without expanding").
+        expanded ? 'h-[60vh]' : 'min-h-[120px]'
       }`}
     >
       <button
@@ -33,7 +42,7 @@ export function BottomSheet() {
         <span className="h-1.5 w-12 rounded-full bg-slate-600" />
       </button>
 
-      <TeamPanel />
+      <TeamPanel {...teamPanel} />
 
       {expanded && (
         <>

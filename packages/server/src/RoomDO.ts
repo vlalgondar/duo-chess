@@ -1,25 +1,32 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
+  acceptProposal,
   advanceToTeamSelect,
-  commitMove,
+  connectedTeamSize,
   createRoom,
   flagFallDeadline,
   joinRoom,
   parseClientMessage,
   randomizeTeams,
   redactFor,
+  rejectProposal,
   remainingMs,
+  requiresConfirmation,
   resolveTimeout,
   setConnected,
   setReady,
   setTeam,
   startGameFromTeamSelect,
+  submitMove,
+  toWireProposal,
   updateSettings,
+  withdrawProposal,
   type ClientRoomView,
   type ErrorCode,
   type GameState,
   type GameStatus,
   type PromotionPiece,
+  type Proposal,
   type Room,
   type RoomSettings,
   type Seat,
@@ -57,6 +64,18 @@ interface SocketAttachment {
 
 function isSocketAttachment(value: unknown): value is SocketAttachment {
   return typeof value === 'object' && value !== null && typeof (value as { seatId?: unknown }).seatId === 'string';
+}
+
+/**
+ * `ctx.getWebSockets()` can still list a socket whose underlying transport
+ * already closed but whose `webSocketClose` handler hasn't run yet (T-10's
+ * Findings: this raced reliably under Playwright's multi-context teardown
+ * and threw an uncaught `TypeError` out of every broadcast loop). Guarding
+ * every `send()` call site with this is cheap and unconditionally correct —
+ * a closing/closed socket was never going to receive the message anyway.
+ */
+function isSocketOpen(socket: WebSocket): boolean {
+  return socket.readyState === 1; // WebSocket.OPEN — a plain literal, since `readyState` has no exported enum here
 }
 
 function findParticipant(room: Room, seatId: string): Seat | Spectator | undefined {
@@ -177,9 +196,24 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'withdraw') {
+      await this.handleWithdraw(ws, attachment.seatId, message.proposalId, message.nonce);
+      return;
+    }
+
+    if (message.t === 'accept') {
+      await this.handleAccept(ws, attachment.seatId, message.proposalId, message.nonce);
+      return;
+    }
+
+    if (message.t === 'reject') {
+      await this.handleReject(ws, attachment.seatId, message.proposalId, message.nonce);
+      return;
+    }
+
     // Every other message type is real wire protocol but has no engine
-    // behind it yet — later tasks (accept/reject/withdraw for multi-player
-    // teams, chat, ...) add the handling as their own machinery lands.
+    // behind it yet — later tasks (chat, annotations, spectator promotion,
+    // team votes, ...) add the handling as their own machinery lands.
   }
 
   /**
@@ -282,14 +316,15 @@ export class RoomDO extends DurableObject {
   }
 
   /**
-   * `propose` auto-commits immediately for every team (T-14). That was
-   * exactly right when every team was solo by construction (§4.4's "solo
-   * team ... propose() immediately followed by an internal auto-commit").
-   * Team Select (T-17) can now seat two players on one side, but the
-   * confirmation gate for that case — a real proposal slot, requiring the
-   * teammate to `accept` — is T-18's job specifically, not this task's; see
-   * TASKS.md's T-17 Findings for why a 2v2/2v1 game is reachable before
-   * T-18 lands and what that means until it does.
+   * A team member's move attempt (T-14/T-18/T-20). `submitMove` (shared) is
+   * the one entry point regardless of team size: a solo team (or a team
+   * whose only other seat is disconnected — `connectedTeamSize`) commits the
+   * instant it's made, exactly as T-14 always did; a team with two connected
+   * players gets a real proposal slot instead, awaiting a teammate's
+   * `accept`. Either way `propose` is also how re-propose and counter-propose
+   * happen (§4.3 rule 4 — "counter-proposing is just proposing"), since
+   * `submitMove`/`proposeMove` replace whatever was in the slot regardless of
+   * who called it.
    */
   private async handlePropose(
     ws: WebSocket,
@@ -312,36 +347,146 @@ export class RoomDO extends DurableObject {
       return;
     }
 
-    const result = commitMove(room.game, { from, to, promotion }, mover, Date.now(), room.settings.timeControl);
+    const teamSize = connectedTeamSize(room.seats, mover);
+    const result = submitMove(
+      room.game,
+      mover,
+      seatId,
+      { from, to, promotion },
+      Date.now(),
+      room.settings.timeControl,
+      teamSize,
+    );
     if (!result.ok) {
       this.sendError(ws, result.code, result.code, nonce);
       return;
     }
 
+    if (requiresConfirmation(teamSize)) {
+      // A real proposal, not a commit — await the teammate's `accept`.
+      this.room = { ...room, game: result.value };
+      await this.persist();
+      await this.broadcastState();
+      this.broadcastProposalUpdate(mover, result.value.proposals[mover]);
+      return;
+    }
+
+    await this.applyCommit(room, result.value, seat!.publicId);
+  }
+
+  /** Proposer only (§4.3 rule 6's mirror — enforced by `withdrawProposal` itself). */
+  private async handleWithdraw(ws: WebSocket, seatId: string, proposalId: string, nonce?: string): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game) {
+      this.sendError(ws, 'ILLEGAL_MOVE', 'no game in progress', nonce);
+      return;
+    }
+    const team = room.seats.find((s) => s.seatId === seatId)?.team;
+    if (!team) {
+      this.sendError(ws, 'NOT_YOUR_TURN', 'not a player in this game', nonce);
+      return;
+    }
+    const result = withdrawProposal(room.game, team, seatId, proposalId);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
     this.room = { ...room, game: result.value };
     await this.persist();
+    await this.broadcastState();
+    this.broadcastProposalUpdate(team, null);
+  }
 
-    const san = result.value.moveHistory.at(-1)!;
+  /** Accepter only, a soft "try something else" (§4.3 rule 6) — clears the slot without committing. */
+  private async handleReject(ws: WebSocket, seatId: string, proposalId: string, nonce?: string): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game) {
+      this.sendError(ws, 'ILLEGAL_MOVE', 'no game in progress', nonce);
+      return;
+    }
+    const team = room.seats.find((s) => s.seatId === seatId)?.team;
+    if (!team) {
+      this.sendError(ws, 'NOT_YOUR_TURN', 'not a player in this game', nonce);
+      return;
+    }
+    const result = rejectProposal(room.game, team, seatId, proposalId);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = { ...room, game: result.value };
+    await this.persist();
+    await this.broadcastState();
+    this.broadcastProposalUpdate(team, null);
+  }
+
+  /**
+   * Accepter confirms the live proposal (§4.3 rule 2/3 — no self-accept, a
+   * stale `proposalId` commits nothing). `move_committed`'s `by` is the
+   * original proposer's publicId and `confirmedBy` the accepter's, so
+   * clients can render "carol proposed, alice confirmed" — distinct from a
+   * solo team's direct commit, which has no `confirmedBy` at all.
+   */
+  private async handleAccept(ws: WebSocket, seatId: string, proposalId: string, nonce?: string): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game) {
+      this.sendError(ws, 'ILLEGAL_MOVE', 'no game in progress', nonce);
+      return;
+    }
+    const team = room.seats.find((s) => s.seatId === seatId)?.team;
+    if (!team) {
+      this.sendError(ws, 'NOT_YOUR_TURN', 'not a player in this game', nonce);
+      return;
+    }
+    const proposal = room.game.proposals[team];
+    const result = acceptProposal(room.game, team, seatId, proposalId, Date.now(), room.settings.timeControl);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    const proposer = proposal ? room.seats.find((s) => s.seatId === proposal.by) : undefined;
+    const accepter = room.seats.find((s) => s.seatId === seatId);
+    await this.applyCommit(room, result.value, proposer?.publicId ?? accepter!.publicId, accepter!.publicId);
+  }
+
+  /**
+   * The shared tail of every path that ends in a committed move — a solo
+   * team's direct `propose` (T-14/T-19) and a confirmed team's `accept`
+   * (T-18/T-20) both land here, so `move_committed`/`state`/`clock_sync`/
+   * `game_over`/alarm-rescheduling only exist in one place. `confirmedBy` is
+   * only set on the accept path (see `handleAccept`).
+   */
+  private async applyCommit(room: Room, game: GameState, by: string, confirmedBy?: string): Promise<void> {
+    this.room = { ...room, game };
+    await this.persist();
+
+    const san = game.moveHistory.at(-1)!;
     this.broadcastAll({
       t: 'move_committed',
       san,
-      fen: result.value.fen,
-      clock: result.value.clock,
-      by: seat!.publicId,
+      fen: game.fen,
+      clock: game.clock,
+      by,
+      ...(confirmedBy !== undefined ? { confirmedBy } : {}),
     });
     await this.broadcastState();
+    // §4.3 rule 7: "cleared on every commit, including after the opponent
+    // moves" — both teams' slots are cleared by `commitMove` regardless of
+    // which team just moved, so both get the news, team-scoped.
+    this.broadcastProposalUpdate('WHITE', null);
+    this.broadcastProposalUpdate('BLACK', null);
     // §7/§8: "clock_sync ... Every ~5s and on every commit" — reset the
     // periodic timer here too, so a sync that just went out on commit isn't
     // immediately duplicated by the alarm a few seconds later.
     this.nextClockSyncAt = Date.now() + CLOCK_SYNC_INTERVAL_MS;
     this.broadcastClockSync();
 
-    if (result.value.status !== 'ACTIVE') {
+    if (game.status !== 'ACTIVE') {
       this.broadcastAll({
         t: 'game_over',
-        status: result.value.status,
-        winner: result.value.winner,
-        reason: GAME_OVER_REASON[result.value.status],
+        status: game.status,
+        winner: game.winner,
+        reason: GAME_OVER_REASON[game.status],
       });
     }
 
@@ -349,6 +494,29 @@ export class RoomDO extends DurableObject {
     // whichever of flag-fall or the next periodic sync is soonest wins the
     // DO's one alarm slot.
     await this.scheduleAlarm();
+  }
+
+  /**
+   * `proposal_update` (§7/§4.3): visible only to members of the proposing
+   * team — the one place besides `redactFor()` that turns a server-internal
+   * `Proposal` (seatId `by`) into its wire shape (`toWireProposal`), so
+   * reusing that helper instead of re-deriving the seatId->publicId lookup
+   * is what keeps this from becoming a second redaction choke point
+   * (CLAUDE.md rule 3). Spectators are never in `room.seats`, so the
+   * team-match filter excludes them for free.
+   */
+  private broadcastProposalUpdate(team: Team, proposal: Proposal | null): void {
+    const room = this.room;
+    if (!room) return;
+    const message = { t: 'proposal_update', proposal: proposal ? toWireProposal(room, proposal) : null };
+    const json = JSON.stringify(message);
+    for (const socket of this.ctx.getWebSockets()) {
+      if (!isSocketOpen(socket)) continue;
+      const attachment = socket.deserializeAttachment();
+      if (!isSocketAttachment(attachment)) continue;
+      const seat = room.seats.find((s) => s.seatId === attachment.seatId);
+      if (seat?.team === team) socket.send(json);
+    }
   }
 
   /**
@@ -521,6 +689,7 @@ export class RoomDO extends DurableObject {
     await this.ctx.storage.put(SEQ_STORAGE_KEY, this.seq);
 
     for (const socket of this.ctx.getWebSockets()) {
+      if (!isSocketOpen(socket)) continue;
       const attachment = socket.deserializeAttachment();
       if (!isSocketAttachment(attachment)) continue;
 
@@ -545,7 +714,7 @@ export class RoomDO extends DurableObject {
   private broadcastAll(message: Record<string, unknown>): void {
     const json = JSON.stringify(message);
     for (const socket of this.ctx.getWebSockets()) {
-      if (!isSocketAttachment(socket.deserializeAttachment())) continue;
+      if (!isSocketOpen(socket) || !isSocketAttachment(socket.deserializeAttachment())) continue;
       socket.send(json);
     }
   }
