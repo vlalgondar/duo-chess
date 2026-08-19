@@ -1,6 +1,14 @@
-import { connectedTeamSize, requiresConfirmation, type ClientRoomView, type PromotionPiece, type Square } from '@duo/shared';
+import {
+  connectedTeamSize,
+  requiresConfirmation,
+  type ChatChannel,
+  type ClientRoomView,
+  type PromotionPiece,
+  type Square,
+} from '@duo/shared';
 import { Board, type ProposalOverlay } from '../components/Board.js';
 import { BottomSheet } from '../components/BottomSheet.js';
+import { Chat } from '../components/Chat.js';
 import { Clock } from '../components/Clock.js';
 import { TeamPanel } from '../components/TeamPanel.js';
 
@@ -10,6 +18,7 @@ interface GameScreenProps {
   onAccept: (proposalId: string) => void;
   onReject: (proposalId: string) => void;
   onWithdraw: (proposalId: string) => void;
+  onSendChat: (text: string, channel: ChatChannel) => void;
   serverClockOffsetMs: number;
 }
 
@@ -30,7 +39,15 @@ const BOARD_SIZE_CLASSNAME =
  * static side panel next to the board — the exact §5.10/§5.5 split, now with live data instead
  * of `BoardScreen`'s disabled placeholder.
  */
-export function GameScreen({ view, onMove, onAccept, onReject, onWithdraw, serverClockOffsetMs }: GameScreenProps) {
+export function GameScreen({
+  view,
+  onMove,
+  onAccept,
+  onReject,
+  onWithdraw,
+  onSendChat,
+  serverClockOffsetMs,
+}: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
   const yourTeam = you?.team ?? null;
   const orientation = yourTeam === 'BLACK' ? 'black' : 'white';
@@ -49,6 +66,12 @@ export function GameScreen({ view, onMove, onAccept, onReject, onWithdraw, serve
 
   const teamSize = yourTeam ? connectedTeamSize(view.seats, yourTeam) : 0;
   const needsConfirmation = yourTeam !== null && requiresConfirmation(teamSize);
+
+  // §5.8: "Only if you're on a 2-player team" — the roster's full team size (not
+  // `connectedTeamSize` above, which governs move-confirmation UX and treats a
+  // disconnected teammate as solo), matching `sendChatMessage`'s own server-side check.
+  const teamRosterSize = yourTeam ? view.seats.filter((s) => s.team === yourTeam).length : 0;
+  const teamChatAvailable = yourTeam !== null && teamRosterSize >= 2;
 
   const proposal = view.proposal;
   const isProposer = proposal?.by === view.you;
@@ -83,6 +106,8 @@ export function GameScreen({ view, onMove, onAccept, onReject, onWithdraw, serve
     onReject,
     onWithdraw,
   };
+
+  const chatProps = { messages: view.chat, teamChatAvailable, onSend: onSendChat };
 
   return (
     <main
@@ -121,11 +146,17 @@ export function GameScreen({ view, onMove, onAccept, onReject, onWithdraw, serve
         )}
       </div>
 
-      <aside data-testid="side-panel" className="hidden w-72 flex-col rounded-lg bg-slate-900 min-[900px]:flex">
+      <aside
+        data-testid="side-panel"
+        className="hidden min-h-0 w-72 flex-col rounded-lg bg-slate-900 min-[900px]:flex min-[900px]:h-[80dvh]"
+      >
         <TeamPanel {...teamPanelProps} />
+        <div className="flex min-h-0 flex-1 flex-col border-t border-slate-800">
+          <Chat {...chatProps} />
+        </div>
       </aside>
 
-      <BottomSheet teamPanel={teamPanelProps} />
+      <BottomSheet teamPanel={teamPanelProps} chat={chatProps} />
     </main>
   );
 }

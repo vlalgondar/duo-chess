@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import {
   generateRoomCode,
   parseServerMessage,
+  type ChatChannel,
   type PromotionPiece,
   type RoomSettings,
   type Square,
@@ -35,6 +36,7 @@ export function App() {
   const setJoinError = useRoomStore((s) => s.setJoinError);
   const setServerClockOffsetMs = useRoomStore((s) => s.setServerClockOffsetMs);
   const setLastError = useRoomStore((s) => s.setLastError);
+  const appendChatMessage = useRoomStore((s) => s.appendChatMessage);
 
   const wsRef = useRef<WebSocket | null>(null);
   // Mutable, not state: the `onMessage` closure below is created once per
@@ -70,6 +72,8 @@ export function App() {
           setView(parsed.value);
         } else if (parsed.value.t === 'clock_sync') {
           setServerClockOffsetMs(parsed.value.serverNow - Date.now());
+        } else if (parsed.value.t === 'chat_message') {
+          appendChatMessage(parsed.value.message);
         } else if (parsed.value.t === 'error') {
           if (hasJoinedRef.current) {
             setLastError(parsed.value.code);
@@ -120,6 +124,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'withdraw', proposalId });
   };
 
+  const handleSendChat = (text: string, channel: ChatChannel) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'chat', text, channel });
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -143,6 +151,7 @@ export function App() {
         onAccept={handleAccept}
         onReject={handleReject}
         onWithdraw={handleWithdraw}
+        onSendChat={handleSendChat}
         serverClockOffsetMs={serverClockOffsetMs}
       />
     );

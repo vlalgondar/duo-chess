@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHAT_HISTORY_LIMIT,
+  CHAT_RATE_LIMIT_COUNT,
+  CHAT_RATE_LIMIT_WINDOW_MS,
   DEFAULT_ROOM_SETTINGS,
   MAX_SEATS,
   MAX_SPECTATORS,
@@ -11,6 +14,7 @@ import {
   leaveRoom,
   promoteSpectator,
   randomizeTeams,
+  sendChatMessage,
   setConnected,
   setReady,
   setTeam,
@@ -559,5 +563,143 @@ describe('setConnected', () => {
   it('is a no-op for an unknown seatId', () => {
     const room = roomWithHost();
     expect(setConnected(room, 'nope', false, NOW + 1)).toEqual(room);
+  });
+});
+
+/** Drives `count` seats through Team Select into a running `IN_GAME`, `teams[i]` for `seat-i`. */
+function startedGame(teams: readonly Team[]): Room {
+  const room = roomWithSeats(teams.length);
+  const teamSelect = advanceToTeamSelect(room, 'seat-0');
+  if (!teamSelect.ok) throw new Error('setup expected TEAM_SELECT');
+
+  let current = teamSelect.value;
+  teams.forEach((team, i) => {
+    const result = setTeam(current, `seat-${i}`, team, NOW);
+    if (!result.ok) throw new Error('setup expected setTeam to succeed');
+    current = result.value;
+  });
+  teams.forEach((_, i) => {
+    const result = setReady(current, `seat-${i}`, true, NOW);
+    if (!result.ok) throw new Error('setup expected setReady to succeed');
+    current = result.value;
+  });
+
+  const started = startGameFromTeamSelect(current, 'seat-0', () => 0);
+  if (!started.ok) throw new Error('setup expected IN_GAME');
+  return started.value;
+}
+
+describe('sendChatMessage', () => {
+  it('appends an ALL message from any phase, even before a team is assigned', () => {
+    const room = roomWithHost();
+    const result = sendChatMessage(room, 'seat-0', 'hi everyone', 'ALL', NOW);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value.chat).toEqual([
+      { id: 'c1', from: 'pub-0', fromName: 'user0', channel: 'ALL', team: null, isSpectator: false, text: 'hi everyone', at: NOW },
+    ]);
+  });
+
+  it('rejects TEAM for a seat with no team yet', () => {
+    const room = roomWithHost();
+    expect(sendChatMessage(room, 'seat-0', 'psst', 'TEAM', NOW)).toEqual({ ok: false, code: 'TEAM_CHAT_UNAVAILABLE' });
+  });
+
+  it('rejects TEAM outside IN_GAME even once a team is assigned', () => {
+    const room = roomWithSeats(2);
+    const teamSelect = advanceToTeamSelect(room, 'seat-0');
+    if (!teamSelect.ok) throw new Error('setup expected TEAM_SELECT');
+    const teamed = setTeam(teamSelect.value, 'seat-0', 'WHITE', NOW);
+    if (!teamed.ok) throw new Error('setup expected setTeam to succeed');
+    expect(sendChatMessage(teamed.value, 'seat-0', 'psst', 'TEAM', NOW)).toEqual({
+      ok: false,
+      code: 'TEAM_CHAT_UNAVAILABLE',
+    });
+  });
+
+  it('rejects TEAM for a solo (1-player) team during IN_GAME', () => {
+    const game = startedGame(['WHITE', 'BLACK']);
+    expect(sendChatMessage(game, 'seat-0', 'psst', 'TEAM', NOW)).toEqual({ ok: false, code: 'TEAM_CHAT_UNAVAILABLE' });
+  });
+
+  it('rejects TEAM for a spectator', () => {
+    const full = roomWithSeats(MAX_SEATS);
+    const withSpectator = joinRoom(full, joiner(MAX_SEATS), NOW);
+    if (!withSpectator.ok || withSpectator.value.role !== 'spectator') throw new Error('setup expected a spectator');
+    expect(sendChatMessage(withSpectator.value.room, `seat-${MAX_SEATS}`, 'psst', 'TEAM', NOW)).toEqual({
+      ok: false,
+      code: 'TEAM_CHAT_UNAVAILABLE',
+    });
+  });
+
+  it('accepts TEAM for a 2-player team during IN_GAME, scoping the message to that team', () => {
+    const game = startedGame(['WHITE', 'WHITE', 'BLACK', 'BLACK']);
+    const result = sendChatMessage(game, 'seat-0', 'go left', 'TEAM', NOW);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value.chat[0]).toMatchObject({ channel: 'TEAM', team: 'WHITE', from: 'pub-0' });
+  });
+
+  it('forces a spectator ALL message to be marked, even though the channel is already ALL', () => {
+    const full = roomWithSeats(MAX_SEATS);
+    const withSpectator = joinRoom(full, joiner(MAX_SEATS), NOW);
+    if (!withSpectator.ok || withSpectator.value.role !== 'spectator') throw new Error('setup expected a spectator');
+    const result = sendChatMessage(withSpectator.value.room, `seat-${MAX_SEATS}`, 'gl hf', 'ALL', NOW);
+    if (!result.ok) throw new Error('expected success');
+    expect(result.value.chat[0]).toMatchObject({ isSpectator: true, channel: 'ALL' });
+  });
+
+  it(`drops the ${CHAT_RATE_LIMIT_COUNT + 1}th message within the window as RATE_LIMITED`, () => {
+    let room = roomWithHost();
+    for (let i = 0; i < CHAT_RATE_LIMIT_COUNT; i++) {
+      const result = sendChatMessage(room, 'seat-0', `msg ${i}`, 'ALL', NOW + i);
+      if (!result.ok) throw new Error('expected success');
+      room = result.value;
+    }
+    expect(sendChatMessage(room, 'seat-0', 'one too many', 'ALL', NOW + CHAT_RATE_LIMIT_COUNT)).toEqual({
+      ok: false,
+      code: 'RATE_LIMITED',
+    });
+  });
+
+  it('allows a message again once the oldest one falls outside the rate-limit window', () => {
+    let room = roomWithHost();
+    for (let i = 0; i < CHAT_RATE_LIMIT_COUNT; i++) {
+      const result = sendChatMessage(room, 'seat-0', `msg ${i}`, 'ALL', NOW + i);
+      if (!result.ok) throw new Error('expected success');
+      room = result.value;
+    }
+    const later = NOW + CHAT_RATE_LIMIT_WINDOW_MS + 1;
+    const result = sendChatMessage(room, 'seat-0', 'back again', 'ALL', later);
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not rate-limit different seats against each other', () => {
+    const room = roomWithSeats(2);
+    let current = room;
+    for (let i = 0; i < CHAT_RATE_LIMIT_COUNT; i++) {
+      const result = sendChatMessage(current, 'seat-0', `msg ${i}`, 'ALL', NOW + i);
+      if (!result.ok) throw new Error('expected success');
+      current = result.value;
+    }
+    const result = sendChatMessage(current, 'seat-1', 'my turn', 'ALL', NOW);
+    expect(result.ok).toBe(true);
+  });
+
+  it(`retains only the last ${CHAT_HISTORY_LIMIT} messages`, () => {
+    let room = roomWithSeats(2);
+    // Alternate seats so the per-seat rate limit never blocks the flood.
+    for (let i = 0; i < CHAT_HISTORY_LIMIT + 10; i++) {
+      const seatId = i % 2 === 0 ? 'seat-0' : 'seat-1';
+      const result = sendChatMessage(room, seatId, `msg ${i}`, 'ALL', NOW + i * (CHAT_RATE_LIMIT_WINDOW_MS + 1));
+      if (!result.ok) throw new Error(`expected success at message ${i}`);
+      room = result.value;
+    }
+    expect(room.chat).toHaveLength(CHAT_HISTORY_LIMIT);
+    expect(room.chat[0]!.text).toBe('msg 10');
+    expect(room.chat.at(-1)!.text).toBe(`msg ${CHAT_HISTORY_LIMIT + 9}`);
+  });
+
+  it('rejects an unknown seatId', () => {
+    const room = roomWithHost();
+    expect(sendChatMessage(room, 'nope', 'hi', 'ALL', NOW)).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
   });
 });

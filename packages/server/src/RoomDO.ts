@@ -13,6 +13,7 @@ import {
   remainingMs,
   requiresConfirmation,
   resolveTimeout,
+  sendChatMessage,
   setConnected,
   setReady,
   setTeam,
@@ -21,6 +22,7 @@ import {
   toWireProposal,
   updateSettings,
   withdrawProposal,
+  type ChatChannel,
   type ClientRoomView,
   type ErrorCode,
   type GameState,
@@ -95,10 +97,11 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  * `propose` (see `handlePropose`). T-17 adds `set_team`/`set_ready`/
  * `randomize_teams`/`update_settings` and makes `start_game` phase-aware
  * (LOBBY -> TEAM_SELECT -> IN_GAME, see `handleStartGame`'s doc comment).
- * Every other client -> server message type is valid per the wire protocol
- * but has no engine
- * support yet (multi-player accept/reject, chat, ...); deliberately left
- * unhandled here for the tasks that build that machinery.
+ * T-18/T-20 add `withdraw`/`accept`/`reject`. T-21 adds `chat` (see
+ * `handleChat`). Every other client -> server message type is valid per the
+ * wire protocol but has no engine support yet (annotations, spectator
+ * promotion, team votes, ...); deliberately left unhandled here for the
+ * tasks that build that machinery.
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -211,9 +214,14 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'chat') {
+      await this.handleChat(ws, attachment.seatId, message.text, message.channel, message.nonce);
+      return;
+    }
+
     // Every other message type is real wire protocol but has no engine
-    // behind it yet — later tasks (chat, annotations, spectator promotion,
-    // team votes, ...) add the handling as their own machinery lands.
+    // behind it yet — later tasks (annotations, spectator promotion, team
+    // votes, ...) add the handling as their own machinery lands.
   }
 
   /**
@@ -497,18 +505,53 @@ export class RoomDO extends DurableObject {
   }
 
   /**
-   * `proposal_update` (§7/§4.3): visible only to members of the proposing
-   * team — the one place besides `redactFor()` that turns a server-internal
-   * `Proposal` (seatId `by`) into its wire shape (`toWireProposal`), so
-   * reusing that helper instead of re-deriving the seatId->publicId lookup
-   * is what keeps this from becoming a second redaction choke point
-   * (CLAUDE.md rule 3). Spectators are never in `room.seats`, so the
-   * team-match filter excludes them for free.
+   * `chat` (§5.8/§7): `sendChatMessage` (shared) enforces the 5/10s rate
+   * limit, the 100-message retention cap, and rejects `TEAM` for a
+   * spectator/solo team/outside `IN_GAME`. The retained `Room.chat` (part of
+   * every persisted+redacted `state`) is what makes history replay on
+   * join/reconnect free — no separate replay path needed. `chat_message`
+   * itself, unlike `state`, is a small per-message broadcast (§8 "deltas
+   * over snapshots"), scoped to the sender's team for `TEAM` and everyone
+   * for `ALL` via `broadcastToTeam`/`broadcastAll`.
    */
-  private broadcastProposalUpdate(team: Team, proposal: Proposal | null): void {
+  private async handleChat(
+    ws: WebSocket,
+    seatId: string,
+    text: string,
+    channel: ChatChannel,
+    nonce?: string,
+  ): Promise<void> {
+    const room = this.room;
+    if (!room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = sendChatMessage(room, seatId, text, channel, Date.now());
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+
+    const chatMessage = result.value.chat.at(-1)!;
+    const broadcast = { t: 'chat_message', message: chatMessage };
+    if (chatMessage.channel === 'TEAM' && chatMessage.team) {
+      this.broadcastToTeam(chatMessage.team, broadcast);
+    } else {
+      this.broadcastAll(broadcast);
+    }
+  }
+
+  /**
+   * Sends `message` only to sockets belonging to `team` — the shared loop
+   * behind both `proposal_update` (§4.3) and `TEAM` `chat_message` (§5.8),
+   * the two team-scoped-but-not-full-`state` broadcasts. Spectators are
+   * never in `room.seats`, so the team-match filter excludes them for free.
+   */
+  private broadcastToTeam(team: Team, message: Record<string, unknown>): void {
     const room = this.room;
     if (!room) return;
-    const message = { t: 'proposal_update', proposal: proposal ? toWireProposal(room, proposal) : null };
     const json = JSON.stringify(message);
     for (const socket of this.ctx.getWebSockets()) {
       if (!isSocketOpen(socket)) continue;
@@ -517,6 +560,21 @@ export class RoomDO extends DurableObject {
       const seat = room.seats.find((s) => s.seatId === attachment.seatId);
       if (seat?.team === team) socket.send(json);
     }
+  }
+
+  /**
+   * `proposal_update` (§7/§4.3): visible only to members of the proposing
+   * team — the one place besides `redactFor()` that turns a server-internal
+   * `Proposal` (seatId `by`) into its wire shape (`toWireProposal`), so
+   * reusing that helper instead of re-deriving the seatId->publicId lookup
+   * is what keeps this from becoming a second redaction choke point
+   * (CLAUDE.md rule 3).
+   */
+  private broadcastProposalUpdate(team: Team, proposal: Proposal | null): void {
+    const room = this.room;
+    if (!room) return;
+    const message = { t: 'proposal_update', proposal: proposal ? toWireProposal(room, proposal) : null };
+    this.broadcastToTeam(team, message);
   }
 
   /**

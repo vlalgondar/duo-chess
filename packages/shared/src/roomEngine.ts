@@ -12,11 +12,28 @@
  */
 import { startGame as buildInitialGameState } from './gameEngine.js';
 import { DEFAULT_TIME_CONTROL } from './timeControls.js';
-import type { ErrorCode, Room, RoomCode, RoomSettings, Seat, SeatId, Spectator, Team } from './types.js';
+import type {
+  ChatChannel,
+  ChatMessage,
+  ErrorCode,
+  Room,
+  RoomCode,
+  RoomSettings,
+  Seat,
+  SeatId,
+  Spectator,
+  Team,
+} from './types.js';
 
 export const MAX_SEATS = 4;
 export const MAX_SPECTATORS = 20;
 export const MAX_TEAM_SIZE = 2;
+
+/** §5.8: "last 100 messages are held ... replayed on join/reconnect." */
+export const CHAT_HISTORY_LIMIT = 100;
+/** §5.8: "rate-limited to 5 messages per 10 seconds per seat." */
+export const CHAT_RATE_LIMIT_COUNT = 5;
+export const CHAT_RATE_LIMIT_WINDOW_MS = 10_000;
 
 export type RoomEngineResult<T> = { ok: true; value: T } | { ok: false; code: ErrorCode };
 
@@ -341,4 +358,73 @@ export function randomizeTeams(room: Room, actorSeatId: SeatId, random: () => nu
   const teamBySeatId = new Map<SeatId, Team>(shuffled.map((s, i) => [s.seatId, i % 2 === 0 ? 'WHITE' : 'BLACK']));
 
   return ok({ ...room, seats: room.seats.map((s) => ({ ...s, team: teamBySeatId.get(s.seatId)! })) });
+}
+
+function findChatSender(
+  room: Room,
+  seatId: SeatId,
+): { publicId: string; username: string; team: Team | null; isSpectator: boolean } | undefined {
+  const seat = room.seats.find((s) => s.seatId === seatId);
+  if (seat) return { publicId: seat.publicId, username: seat.username, team: seat.team, isSpectator: false };
+
+  const spectator = room.spectators.find((s) => s.seatId === seatId);
+  if (spectator) return { publicId: spectator.publicId, username: spectator.username, team: null, isSpectator: true };
+
+  return undefined;
+}
+
+/**
+ * §5.8/§7 `chat`: `TEAM` reaches your teammate only, and only while you're on
+ * a 2-player team during `IN_GAME`; `ALL` reaches every player and spectator
+ * in any phase. `text` is already trimmed and length-capped by the wire
+ * schema (`chatMessageInputSchema`) before it reaches here, same as
+ * `propose`'s square/promotion validation living at the protocol layer.
+ *
+ * A spectator (or a seat with no team, or a solo team, or outside
+ * `IN_GAME`) requesting `TEAM` is rejected with `TEAM_CHAT_UNAVAILABLE`
+ * rather than silently rerouted to `ALL` — the client's channel selector
+ * should never have offered it, so a request reaching here regardless is
+ * either a bug or a forged message, and §7's own wire-table note ("TEAM
+ * rejected for spectators and solo teams") reads as a hard rejection, not a
+ * fallback.
+ *
+ * Rate-limited to `CHAT_RATE_LIMIT_COUNT` messages per
+ * `CHAT_RATE_LIMIT_WINDOW_MS`, counted against the sender's own messages
+ * still in the retained history — the only per-sender timing state this
+ * module has, since `Room` carries no separate rate-limit ledger.
+ */
+export function sendChatMessage(
+  room: Room,
+  seatId: SeatId,
+  text: string,
+  channel: ChatChannel,
+  now: number,
+): RoomEngineResult<Room> {
+  const sender = findChatSender(room, seatId);
+  if (!sender) return fail('SEAT_NOT_FOUND');
+
+  if (channel === 'TEAM') {
+    const teamSize = sender.team ? room.seats.filter((s) => s.team === sender.team).length : 0;
+    if (sender.isSpectator || !sender.team || teamSize < 2 || room.phase !== 'IN_GAME') {
+      return fail('TEAM_CHAT_UNAVAILABLE');
+    }
+  }
+
+  const recentCount = room.chat.filter(
+    (m) => m.from === sender.publicId && now - m.at < CHAT_RATE_LIMIT_WINDOW_MS,
+  ).length;
+  if (recentCount >= CHAT_RATE_LIMIT_COUNT) return fail('RATE_LIMITED');
+
+  const message: ChatMessage = {
+    id: `c${room.chat.length + 1}`,
+    from: sender.publicId,
+    fromName: sender.username,
+    channel,
+    team: channel === 'TEAM' ? sender.team : null,
+    isSpectator: sender.isSpectator,
+    text,
+    at: now,
+  };
+
+  return ok({ ...room, chat: [...room.chat, message].slice(-CHAT_HISTORY_LIMIT) });
 }

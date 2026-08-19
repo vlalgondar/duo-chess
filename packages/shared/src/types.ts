@@ -183,6 +183,9 @@ export interface ClientRoomView {
  * `NOT_PROPOSER` (T-18) is `withdraw` attempted by anyone but the proposal's
  * own proposer; `CANNOT_SELF_REJECT` is `reject` attempted by the proposer
  * against their own proposal (the accepter-only mirror of `CANNOT_SELF_ACCEPT`).
+ * `TEAM_CHAT_UNAVAILABLE` (T-21) is a `chat` with `channel: 'TEAM'` sent by a
+ * spectator, a seat with no team, a solo team, or outside `IN_GAME` (§5.8's
+ * "Team ... Only if you're on a 2-player team, and only during IN_GAME").
  */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
@@ -202,4 +205,5 @@ export type ErrorCode =
   | 'TEAM_SIZE_INVALID'
   | 'NOT_ALL_READY'
   | 'NOT_PROPOSER'
-  | 'CANNOT_SELF_REJECT';
+  | 'CANNOT_SELF_REJECT'
+  | 'TEAM_CHAT_UNAVAILABLE';

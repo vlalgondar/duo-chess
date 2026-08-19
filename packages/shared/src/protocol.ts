@@ -379,6 +379,7 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'NOT_ALL_READY',
   'NOT_PROPOSER',
   'CANNOT_SELF_REJECT',
+  'TEAM_CHAT_UNAVAILABLE',
 ]);
 
 export const errorMessageSchema = z.object({
