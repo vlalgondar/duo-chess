@@ -46,8 +46,14 @@ export function toWireAnnotation(annotation: Annotation): WireAnnotation {
   return wireAnnotation;
 }
 
-function toWireTeamVote(vote: TeamVote): WireTeamVote {
-  return { ...vote, agreedSeats: [...vote.agreedSeats] };
+/**
+ * `agreedSeats` is server-internal (§10), same as `Proposal.by` — the wire form identifies each
+ * agreeing teammate by publicId instead (T-25, fixing the leak TASKS.md's Findings flagged when
+ * T-08 built this choke point ahead of team votes actually existing).
+ */
+function toWireTeamVote(room: Room, vote: TeamVote): WireTeamVote {
+  const agreedSeats = [...vote.agreedSeats].map((seatId) => room.seats.find((s) => s.seatId === seatId)?.publicId ?? '');
+  return { ...vote, agreedSeats };
 }
 
 /**
@@ -64,9 +70,9 @@ export function toWireProposal(room: Room, proposal: Proposal): WireProposal {
   return { ...rest, by: proposer?.publicId ?? '' };
 }
 
-function toPublicGameState(game: GameState): PublicGameState {
+function toPublicGameState(room: Room, game: GameState): PublicGameState {
   const { proposals: _proposals, annotations: _annotations, pendingVotes, ...rest } = game;
-  return { ...rest, pendingVotes: pendingVotes.map(toWireTeamVote) };
+  return { ...rest, pendingVotes: pendingVotes.map((v) => toWireTeamVote(room, v)) };
 }
 
 function teamOf(viewer: Seat | Spectator): Team | null {
@@ -85,7 +91,7 @@ export function redactFor(room: Room, viewer: Seat | Spectator): ClientRoomView 
     seats: room.seats.map(toPublicSeat),
     spectators: room.spectators.map(toPublicSpectator),
     settings: room.settings,
-    game: room.game ? toPublicGameState(room.game) : null,
+    game: room.game ? toPublicGameState(room, room.game) : null,
     chat: room.chat.filter((m) => m.channel === 'ALL' || m.team === team),
     you: viewer.publicId,
     proposal: proposal ? toWireProposal(room, proposal) : null,

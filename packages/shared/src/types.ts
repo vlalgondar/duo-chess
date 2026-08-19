@@ -186,6 +186,13 @@ export interface ClientRoomView {
  * `TEAM_CHAT_UNAVAILABLE` (T-21) is a `chat` with `channel: 'TEAM'` sent by a
  * spectator, a seat with no team, a solo team, or outside `IN_GAME` (§5.8's
  * "Team ... Only if you're on a 2-player team, and only during IN_GAME").
+ * `VOTE_NOT_SUPPORTED` (T-25) is a `vote` with `kind: 'TAKEBACK'` — the
+ * `TeamVoteKind` union carries it (§4.5's own table already marks takebacks
+ * "optional"), but actually implementing takebacks is the Backlog's
+ * unasked-for "Takebacks" item, so a `TAKEBACK` vote is rejected outright
+ * rather than silently gathering agreement and then doing nothing.
+ * `NO_DRAW_OFFER` is `DRAW_ACCEPT` sent with no live opposing-team offer to
+ * accept (including a team trying to accept its own offer).
  */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
@@ -206,4 +213,6 @@ export type ErrorCode =
   | 'NOT_ALL_READY'
   | 'NOT_PROPOSER'
   | 'CANNOT_SELF_REJECT'
-  | 'TEAM_CHAT_UNAVAILABLE';
+  | 'TEAM_CHAT_UNAVAILABLE'
+  | 'VOTE_NOT_SUPPORTED'
+  | 'NO_DRAW_OFFER';

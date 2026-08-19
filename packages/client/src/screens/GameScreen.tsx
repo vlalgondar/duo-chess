@@ -7,6 +7,7 @@ import {
   type ClientRoomView,
   type PromotionPiece,
   type Square,
+  type TeamVoteKind,
   type WireAnnotation,
 } from '@duo/shared';
 import { Board, type ProposalOverlay } from '../components/Board.js';
@@ -15,6 +16,7 @@ import { Chat } from '../components/Chat.js';
 import { Clock } from '../components/Clock.js';
 import { Spectators } from '../components/Spectators.js';
 import { TeamPanel } from '../components/TeamPanel.js';
+import { VoteActions } from '../components/VoteActions.js';
 
 interface GameScreenProps {
   view: ClientRoomView;
@@ -24,6 +26,7 @@ interface GameScreenProps {
   onWithdraw: (proposalId: string) => void;
   onSendChat: (text: string, channel: ChatChannel) => void;
   onAnnotate: (annotations: WireAnnotation[]) => void;
+  onVote: (kind: TeamVoteKind) => void;
   serverClockOffsetMs: number;
 }
 
@@ -61,6 +64,7 @@ export function GameScreen({
   onWithdraw,
   onSendChat,
   onAnnotate,
+  onVote,
   serverClockOffsetMs,
 }: GameScreenProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
@@ -152,6 +156,15 @@ export function GameScreen({
             {teammateUsername} disconnected — you can move alone
           </p>
         )}
+        <VoteActions
+          yourTeam={yourTeam}
+          you={view.you}
+          gameStatus={game.status}
+          pendingVotes={game.pendingVotes}
+          drawOffer={game.drawOffer}
+          requiresConfirmation={needsConfirmation}
+          onVote={onVote}
+        />
         {/* §5.7: promotion is never offered here — `onPromote` omitted — since it's
             rejected outside LOBBY/TEAM_SELECT anyway (roomEngine.promoteSpectator). */}
         <Spectators spectators={view.spectators} seats={view.seats} />

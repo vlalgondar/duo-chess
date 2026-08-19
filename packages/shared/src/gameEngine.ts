@@ -14,7 +14,7 @@
  * `fen` in isolation.
  */
 import { Chess } from 'chess.js';
-import { advanceClock, startClock } from './clock.js';
+import { advanceClock, remainingMs, startClock } from './clock.js';
 import type {
   Annotation,
   AnnotationColor,
@@ -26,6 +26,8 @@ import type {
   SeatId,
   Square,
   Team,
+  TeamVote,
+  TeamVoteKind,
   TimeControl,
   WireAnnotation,
 } from './types.js';
@@ -120,7 +122,10 @@ export function startGame(timeControl: TimeControl): GameState {
  * from `moveHistory` so repetition/fifty-move state is exact rather than
  * reconstructed from a single FEN. Clears both teams' proposals and
  * annotations (§4.3 rule 7: cleared on *every* commit, including the
- * opponent's) and re-derives `status`/`winner`.
+ * opponent's) and re-derives `status`/`winner`. Also clears any live draw
+ * offer and in-progress team votes (§4.5) — an offer or a resign/draw vote
+ * that wasn't settled before the next move is stale by the time it lands,
+ * the same "fresh slate on commit" reasoning already applied to proposals.
  *
  * Clock advancement (§4.6: increment on commit, idle until White's first
  * commit, unlimited mode) is `clock.ts`'s `advanceClock` — see there for the
@@ -171,6 +176,8 @@ export function commitMove(
     clock,
     status,
     winner,
+    drawOffer: null,
+    pendingVotes: [],
   });
 }
 
@@ -371,4 +378,101 @@ export function submitMove(
     now,
     timeControl,
   );
+}
+
+/**
+ * §4.5: a resign/draw-offer/draw-accept vote has 30s for a 2-player team's
+ * *other* member to agree before it lapses.
+ */
+export const VOTE_EXPIRY_MS = 30_000;
+
+function opposingTeam(team: Team): Team {
+  return team === 'WHITE' ? 'BLACK' : 'WHITE';
+}
+
+/** `remainingMs` for both teams at `now`, clock stopped — the same "freeze at the true live
+ * value, not the stale stored one" treatment `RoomDO`'s own flag-fall/abandonment resolution
+ * gives the clock (T-16/T-24), done here instead since `submitVote` already has full `GameState`
+ * and `now` in hand.
+ */
+function freezeClock(game: GameState, now: number): GameState['clock'] {
+  return {
+    whiteMs: remainingMs(game.clock, 'WHITE', game.sideToMove, now),
+    blackMs: remainingMs(game.clock, 'BLACK', game.sideToMove, now),
+    turnStartedAt: null,
+    running: false,
+  };
+}
+
+/**
+ * Applies an *agreed* vote's effect (§4.1's Resignation/Draw-agreement rows) and clears `team`'s
+ * slot in `pendingVotes` — reached once a solo team votes at all, or a 2-player team's vote has
+ * every connected member's agreement.
+ */
+function resolveVote(game: GameState, team: Team, kind: TeamVoteKind, now: number): GameState {
+  const withoutOwnVote: GameState = {
+    ...game,
+    pendingVotes: game.pendingVotes.filter((v) => v.initiator !== team),
+  };
+
+  if (kind === 'RESIGN') {
+    return { ...withoutOwnVote, status: 'RESIGNED', winner: opposingTeam(team), clock: freezeClock(game, now) };
+  }
+  if (kind === 'DRAW_ACCEPT') {
+    return { ...withoutOwnVote, status: 'DRAW', winner: null, drawOffer: null, clock: freezeClock(game, now) };
+  }
+  // DRAW_OFFER: doesn't end the game — it goes to the opponents, who accept via their own vote.
+  return { ...withoutOwnVote, drawOffer: { by: team, at: now } };
+}
+
+/**
+ * A team member's `RESIGN`/`DRAW_OFFER`/`DRAW_ACCEPT` vote (§4.5), the generic `TeamVote`
+ * mechanic: a solo team's vote (or a 2-player team with a disconnected member — `teamSize` is
+ * the caller's *connected* count, same `requiresConfirmation`/`connectedTeamSize` convention
+ * `submitMove` already uses) resolves immediately; a connected 2-player team's vote joins
+ * whatever's already in `team`'s slot if it's the same `kind` (the teammate's agreement resolves
+ * it), or replaces the slot with a fresh one otherwise — the same single-slot-per-team,
+ * replace-on-mismatch shape `proposeMove`'s single proposal slot already uses.
+ *
+ * `TAKEBACK` is real wire protocol (§7) but not an implemented mechanic — TASKS.md's Backlog
+ * lists takebacks as explicitly out of scope, and a `TeamVote` that resolves to nothing coherent
+ * would be a half-built feature (CLAUDE.md's working agreement), so it's refused outright.
+ * `DRAW_ACCEPT` requires a live offer from the *other* team — accepting your own team's offer,
+ * or accepting when nothing was offered, is refused rather than silently ending the game.
+ */
+export function submitVote(
+  game: GameState,
+  team: Team,
+  by: SeatId,
+  kind: TeamVoteKind,
+  now: number,
+  teamSize: number,
+  voteExpiryMs: number = VOTE_EXPIRY_MS,
+): GameEngineResult<GameState> {
+  if (game.status !== 'ACTIVE') return fail('ILLEGAL_MOVE');
+  if (kind === 'TAKEBACK') return fail('VOTE_NOT_SUPPORTED');
+  if (kind === 'DRAW_ACCEPT' && (game.drawOffer === null || game.drawOffer.by === team)) {
+    return fail('NO_DRAW_OFFER');
+  }
+
+  if (!requiresConfirmation(teamSize)) {
+    return ok(resolveVote(game, team, kind, now));
+  }
+
+  const current = game.pendingVotes.find((v) => v.initiator === team);
+  const agreedSeats = new Set(current?.kind === kind ? current.agreedSeats : []);
+  agreedSeats.add(by);
+
+  if (agreedSeats.size >= teamSize) {
+    return ok(resolveVote(game, team, kind, now));
+  }
+
+  const vote: TeamVote = { kind, initiator: team, agreedSeats, expiresAt: now + voteExpiryMs };
+  return ok({ ...game, pendingVotes: [...game.pendingVotes.filter((v) => v.initiator !== team), vote] });
+}
+
+/** §4.5: an unresolved vote just lapses at `expiresAt` — no effect beyond clearing the slot. */
+export function expireVotes(game: GameState, now: number): GameState {
+  const pendingVotes = game.pendingVotes.filter((v) => v.expiresAt > now);
+  return pendingVotes.length === game.pendingVotes.length ? game : { ...game, pendingVotes };
 }

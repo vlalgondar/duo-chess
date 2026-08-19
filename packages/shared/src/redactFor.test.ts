@@ -46,7 +46,9 @@ const game: GameState = {
   status: 'ACTIVE',
   winner: null,
   drawOffer: null,
-  pendingVotes: [],
+  pendingVotes: [
+    { kind: 'RESIGN', initiator: 'WHITE', agreedSeats: new Set([white1.seatId]), expiresAt: NOW + 30_000 },
+  ],
 };
 
 const room: Room = {
@@ -104,6 +106,13 @@ describe('redactFor', () => {
 
   it('spectator sees no annotations', () => {
     expect(redactFor(room, spectator).annotations).toEqual([]);
+  });
+
+  it.each(VIEWER_TYPES)('%s sees pendingVotes.agreedSeats identified by publicId, not seatId', (kind) => {
+    const view = redactFor(room, viewerFor(kind));
+    expect(view.game?.pendingVotes).toEqual([
+      { kind: 'RESIGN', initiator: 'WHITE', agreedSeats: [white1.publicId], expiresAt: NOW + 30_000 },
+    ]);
   });
 
   it('WHITE sees its own TEAM chat plus ALL, not BLACK\'s TEAM chat', () => {

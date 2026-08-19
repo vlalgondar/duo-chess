@@ -6,6 +6,7 @@ import {
   annotationColorFor,
   connectedTeamSize,
   createRoom,
+  expireVotes,
   flagFallDeadline,
   joinRoom,
   parseClientMessage,
@@ -24,9 +25,11 @@ import {
   setTeam,
   startGameFromTeamSelect,
   submitMove,
+  submitVote,
   toWireAnnotation,
   toWireProposal,
   updateSettings,
+  VOTE_EXPIRY_MS,
   withdrawProposal,
   type Annotation,
   type ChatChannel,
@@ -42,6 +45,7 @@ import {
   type Spectator,
   type Square,
   type Team,
+  type TeamVoteKind,
   type WireAnnotation,
 } from '@duo/shared';
 
@@ -109,9 +113,9 @@ function findParticipant(room: Room, seatId: string): Seat | Spectator | undefin
  * `handleChat`). T-22 adds `annotate` (see `handleAnnotate`). T-23 adds
  * `promote_spectator` (see `handlePromoteSpectator`) — `join` has spectated
  * a 5th+ joiner, or anyone joining `IN_GAME`, since T-09/T-07's `joinRoom`.
- * Every other client -> server message type is valid per the wire protocol
- * but has no engine support yet (team votes, ...); deliberately left
- * unhandled here for the tasks that build that machinery.
+ * T-25 adds `vote` (see `handleVote`) — resign/draw-offer/draw-accept, the
+ * generic `TeamVote` mechanic, folded into the same single-slot deadline
+ * queue (rule 4) that already drives flag-fall and abandonment.
  */
 export class RoomDO extends DurableObject {
   private room: Room | null = null;
@@ -125,6 +129,13 @@ export class RoomDO extends DurableObject {
    * field through storage for it.
    */
   private nextClockSyncAt: number | undefined;
+  /**
+   * §4.5's 30s vote-expiry window — an instance field (not persisted, not part of `Room`) rather
+   * than a hardcoded constant so `debugSetVoteExpiryMs` can shrink it for tests, the same
+   * precedent `debugSetTimeControl` (T-16) set for proving a real, unforced alarm firing without
+   * a genuine 30-second wait.
+   */
+  private voteExpiryMs = VOTE_EXPIRY_MS;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -239,9 +250,13 @@ export class RoomDO extends DurableObject {
       return;
     }
 
+    if (message.t === 'vote') {
+      await this.handleVote(ws, attachment.seatId, message.kind, message.nonce);
+      return;
+    }
+
     // Every other message type is real wire protocol but has no engine
-    // behind it yet — later tasks (team votes, ...) add the handling as
-    // their own machinery lands.
+    // behind it yet.
   }
 
   /**
@@ -630,6 +645,51 @@ export class RoomDO extends DurableObject {
   }
 
   /**
+   * `vote` (§4.5/§7): resign, offer a draw, or accept the opponents' draw offer. `submitVote`
+   * (shared) is the one entry point for all three, mirroring `submitMove`'s solo-vs-2-player
+   * split — a solo team (or one with a disconnected member, via `connectedTeamSize`) resolves
+   * immediately, a connected 2-player team's vote joins or replaces its slot. There is no
+   * dedicated `vote_update` message (§7's server->client table has none) — a resolved or
+   * still-pending vote is just part of `game.pendingVotes`/`game.drawOffer` on the next `state`,
+   * the same "no delta message" treatment `set_team`/`set_ready` already get.
+   */
+  private async handleVote(ws: WebSocket, seatId: string, kind: TeamVoteKind, nonce?: string): Promise<void> {
+    const room = this.room;
+    if (!room || !room.game || room.phase !== 'IN_GAME') {
+      this.sendError(ws, 'ILLEGAL_MOVE', 'no game in progress', nonce);
+      return;
+    }
+    const team = room.seats.find((s) => s.seatId === seatId)?.team;
+    if (!team) {
+      this.sendError(ws, 'NOT_YOUR_TURN', 'not a player in this game', nonce);
+      return;
+    }
+
+    const teamSize = connectedTeamSize(room.seats, team);
+    const result = submitVote(room.game, team, seatId, kind, Date.now(), teamSize, this.voteExpiryMs);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+
+    this.room = { ...room, game: result.value };
+    await this.persist();
+    await this.broadcastState();
+    if (result.value.status !== 'ACTIVE') {
+      this.broadcastAll({
+        t: 'game_over',
+        status: result.value.status,
+        winner: result.value.winner,
+        reason: GAME_OVER_REASON[result.value.status],
+      });
+    }
+    // Rescheduled per T-16's single-slot deadline queue (rule 4): a fresh
+    // pending vote adds a new expiry deadline, and a resolved RESIGN/
+    // DRAW_ACCEPT stops the clock, both of which can change what's next.
+    await this.scheduleAlarm();
+  }
+
+  /**
    * Sends `message` only to sockets belonging to `team` — the shared loop
    * behind both `proposal_update` (§4.3) and `TEAM` `chat_message` (§5.8),
    * the two team-scoped-but-not-full-`state` broadcasts. Spectators are
@@ -706,6 +766,20 @@ export class RoomDO extends DurableObject {
       });
       if (abandonedTeams.length > 0) {
         await this.resolveTeamAbandonment(gameAfterFlagFall, abandonedTeams, now);
+      }
+    }
+
+    // Re-read again — a resign/draw-accept vote resolving via `handleVote`
+    // can't race the alarm (both run on the DO's single execution thread),
+    // but a flag-fall/abandonment resolution just above can end the game
+    // before any of its votes would otherwise have expired.
+    const gameForVotes = this.room?.game;
+    if (this.room && gameForVotes && gameForVotes.status === 'ACTIVE') {
+      const expired = expireVotes(gameForVotes, now);
+      if (expired !== gameForVotes) {
+        this.room = { ...this.room, game: expired };
+        await this.persist();
+        await this.broadcastState();
       }
     }
 
@@ -789,10 +863,12 @@ export class RoomDO extends DurableObject {
   /**
    * Recomputes the single alarm slot from the current deadline queue —
    * flag-fall (if a clock is running) and the next periodic `clock_sync` (if
-   * a game is in progress) — and arms `ctx.storage.setAlarm()` for whichever
-   * is soonest. The only place that calls `setAlarm`/`deleteAlarm`, so every
-   * caller (join/rehydrate, start_game, propose, the alarm handler itself)
-   * routes through here rather than poking the alarm directly.
+   * a game is in progress), each team's abandonment deadline, and every
+   * pending vote's expiry (T-25) — and arms `ctx.storage.setAlarm()` for
+   * whichever is soonest. The only place that calls `setAlarm`/`deleteAlarm`,
+   * so every caller (join/rehydrate, start_game, propose, vote, the alarm
+   * handler itself) routes through here rather than poking the alarm
+   * directly.
    */
   private async scheduleAlarm(now = Date.now()): Promise<void> {
     const room = this.room;
@@ -814,6 +890,10 @@ export class RoomDO extends DurableObject {
     for (const team of ['WHITE', 'BLACK'] as const) {
       const deadline = abandonmentDeadline(room.seats, team, room.settings.disconnectGraceMs);
       if (deadline !== null) deadlines.push(deadline);
+    }
+
+    for (const vote of game.pendingVotes) {
+      deadlines.push(vote.expiresAt);
     }
 
     await this.ctx.storage.setAlarm(Math.min(...deadlines));
@@ -955,5 +1035,17 @@ export class RoomDO extends DurableObject {
     if (!this.room) return;
     this.room = { ...this.room, settings: { ...this.room.settings, timeControl } };
     await this.persist();
+  }
+
+  /**
+   * Test-only vote-expiry override, same precedent and reason as
+   * `debugSetTimeControl` above: T-25's harness tests need a genuinely short
+   * expiry to prove the alarm actually clears a lapsed vote, rather than
+   * waiting out the real 30s window. Not part of `Room`/`RoomSettings` (§4.5
+   * never lists it as configurable), so — like `voteExpiryMs` itself — this
+   * doesn't persist and resets to `VOTE_EXPIRY_MS` on eviction.
+   */
+  debugSetVoteExpiryMs(ms: number): void {
+    this.voteExpiryMs = ms;
   }
 }

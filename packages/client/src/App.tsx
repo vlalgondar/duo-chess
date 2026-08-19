@@ -7,6 +7,7 @@ import {
   type RoomSettings,
   type Square,
   type Team,
+  type TeamVoteKind,
   type WireAnnotation,
 } from '@duo/shared';
 import { ReconnectBanner } from './components/ReconnectBanner.js';
@@ -225,6 +226,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'annotate', annotations });
   };
 
+  const handleVote = (kind: TeamVoteKind) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'vote', kind });
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -257,6 +262,7 @@ export function App() {
           onWithdraw={handleWithdraw}
           onSendChat={handleSendChat}
           onAnnotate={handleAnnotate}
+          onVote={handleVote}
           serverClockOffsetMs={serverClockOffsetMs}
         />
       </>

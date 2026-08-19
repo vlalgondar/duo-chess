@@ -4,6 +4,7 @@ import {
   acceptProposal,
   checkGameEnd,
   commitMove,
+  expireVotes,
   legalMoves,
   proposeMove,
   rejectProposal,
@@ -12,6 +13,8 @@ import {
   setAnnotations,
   startGame,
   submitMove,
+  submitVote,
+  VOTE_EXPIRY_MS,
   withdrawProposal,
 } from './gameEngine.js';
 import { connectedTeamSize } from './roomEngine.js';
@@ -571,5 +574,134 @@ describe('resolveAbandonment', () => {
 
   it('is winnerless if both teams abandoned at once', () => {
     expect(resolveAbandonment(['WHITE', 'BLACK'])).toEqual({ status: 'ABANDONED', winner: null });
+  });
+});
+
+describe('team votes (§4.5 resign / draw offer / draw accept)', () => {
+  const ALICE = 'seat-alice';
+  const CAROL = 'seat-carol';
+
+  it('a solo team resigns immediately, no pending vote created', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 1);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({ status: 'RESIGNED', winner: 'BLACK' });
+    expect(result.value.pendingVotes).toEqual([]);
+  });
+
+  it('a solo team offers and the (solo) opponent accepts a draw immediately', () => {
+    let game = startGame(TIME_CONTROL);
+    const offered = submitVote(game, 'WHITE', ALICE, 'DRAW_OFFER', NOW, 1);
+    expect(offered.ok).toBe(true);
+    if (!offered.ok) return;
+    expect(offered.value.status).toBe('ACTIVE');
+    expect(offered.value.drawOffer).toEqual({ by: 'WHITE', at: NOW });
+    game = offered.value;
+
+    const accepted = submitVote(game, 'BLACK', 'seat-bob', 'DRAW_ACCEPT', NOW + 1, 1);
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(accepted.value).toMatchObject({ status: 'DRAW', winner: null, drawOffer: null });
+  });
+
+  it('one-sided resign records agreement but does not end the game', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 2);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.status).toBe('ACTIVE');
+    expect(result.value.pendingVotes).toEqual([
+      { kind: 'RESIGN', initiator: 'WHITE', agreedSeats: new Set([ALICE]), expiresAt: NOW + VOTE_EXPIRY_MS },
+    ]);
+  });
+
+  it('both teammates resigning ends the game, opponent wins, clock stops', () => {
+    let game = startGame(TIME_CONTROL);
+    const first = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 2);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    game = first.value;
+
+    const second = submitVote(game, 'WHITE', CAROL, 'RESIGN', NOW + 1_000, 2);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.value).toMatchObject({ status: 'RESIGNED', winner: 'BLACK' });
+    expect(second.value.pendingVotes).toEqual([]);
+    expect(second.value.clock.running).toBe(false);
+  });
+
+  it('the same seat voting twice does not resolve a 2-player team\'s vote on its own', () => {
+    let game = startGame(TIME_CONTROL);
+    const first = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 2);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    game = first.value;
+
+    const repeat = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW + 1_000, 2);
+    expect(repeat.ok).toBe(true);
+    if (!repeat.ok) return;
+    expect(repeat.value.status).toBe('ACTIVE');
+    expect(repeat.value.pendingVotes).toHaveLength(1);
+  });
+
+  it('voting a different kind replaces the team\'s slot rather than joining it', () => {
+    let game = startGame(TIME_CONTROL);
+    const resign = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 2);
+    expect(resign.ok).toBe(true);
+    if (!resign.ok) return;
+    game = resign.value;
+
+    const offer = submitVote(game, 'WHITE', ALICE, 'DRAW_OFFER', NOW + 1_000, 2);
+    expect(offer.ok).toBe(true);
+    if (!offer.ok) return;
+    expect(offer.value.pendingVotes).toEqual([
+      { kind: 'DRAW_OFFER', initiator: 'WHITE', agreedSeats: new Set([ALICE]), expiresAt: NOW + 1_000 + VOTE_EXPIRY_MS },
+    ]);
+  });
+
+  it('expiry clears the vote without resolving it', () => {
+    const game = startGame(TIME_CONTROL);
+    const started = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 2);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const expiresAt = started.value.pendingVotes[0]!.expiresAt;
+
+    const stillPending = expireVotes(started.value, expiresAt - 1);
+    expect(stillPending.pendingVotes).toHaveLength(1);
+
+    const expired = expireVotes(started.value, expiresAt);
+    expect(expired.status).toBe('ACTIVE');
+    expect(expired.pendingVotes).toEqual([]);
+  });
+
+  it('DRAW_ACCEPT with no live offer is rejected', () => {
+    const game = startGame(TIME_CONTROL);
+    const result = submitVote(game, 'WHITE', ALICE, 'DRAW_ACCEPT', NOW, 1);
+    expect(result).toEqual({ ok: false, code: 'NO_DRAW_OFFER' });
+  });
+
+  it('a team cannot accept its own draw offer', () => {
+    const game = startGame(TIME_CONTROL);
+    const offered = submitVote(game, 'WHITE', ALICE, 'DRAW_OFFER', NOW, 1);
+    expect(offered.ok).toBe(true);
+    if (!offered.ok) return;
+    const result = submitVote(offered.value, 'WHITE', CAROL, 'DRAW_ACCEPT', NOW + 1, 2);
+    expect(result).toEqual({ ok: false, code: 'NO_DRAW_OFFER' });
+  });
+
+  it('TAKEBACK is refused — not an implemented mechanic (Backlog)', () => {
+    const game = startGame(TIME_CONTROL);
+    expect(submitVote(game, 'WHITE', ALICE, 'TAKEBACK', NOW, 1)).toEqual({ ok: false, code: 'VOTE_NOT_SUPPORTED' });
+    expect(submitVote(game, 'WHITE', ALICE, 'TAKEBACK', NOW, 2)).toEqual({ ok: false, code: 'VOTE_NOT_SUPPORTED' });
+  });
+
+  it('a vote is refused once the game has already ended', () => {
+    const game = startGame(TIME_CONTROL);
+    const resigned = submitVote(game, 'WHITE', ALICE, 'RESIGN', NOW, 1);
+    expect(resigned.ok).toBe(true);
+    if (!resigned.ok) return;
+    const result = submitVote(resigned.value, 'BLACK', 'seat-bob', 'RESIGN', NOW + 1, 1);
+    expect(result).toEqual({ ok: false, code: 'ILLEGAL_MOVE' });
   });
 });

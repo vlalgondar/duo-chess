@@ -380,6 +380,8 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'NOT_PROPOSER',
   'CANNOT_SELF_REJECT',
   'TEAM_CHAT_UNAVAILABLE',
+  'VOTE_NOT_SUPPORTED',
+  'NO_DRAW_OFFER',
 ]);
 
 export const errorMessageSchema = z.object({
