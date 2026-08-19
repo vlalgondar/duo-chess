@@ -153,26 +153,33 @@ export function GameScreen({
       className="flex min-h-dvh flex-col bg-slate-950 text-slate-100 min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
     >
       <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:p-0">
-        <div className="flex items-center gap-2">
+        {/* Mobile only: at 390px wide this column is ~870px tall (well past any phone's
+            dvh), so a player scrolls to clear the fixed BottomSheet off the board — which
+            used to carry the header, including Resign, off the top edge with it. Pinning
+            it removes that dead zone. Inert at >=900px, where the column already fits and
+            there's no sheet: `min-[900px]:*` resets it back to a plain child of the
+            `gap-4 items-center` column, pixel-identical to the un-wrapped siblings before
+            this change. */}
+        <div className="sticky top-0 z-20 flex w-screen flex-row flex-wrap items-center justify-center gap-2 bg-slate-950 py-2 min-[900px]:static min-[900px]:w-auto min-[900px]:flex-col min-[900px]:gap-4 min-[900px]:bg-transparent min-[900px]:py-0">
           <SoundToggle enabled={soundEnabled} onToggle={onToggleSound} />
-        </div>
-        <p data-testid="game-status" className="text-sm text-slate-400">
-          {statusText}
-        </p>
-        {teammateDisconnected && (
-          <p data-testid="teammate-disconnected" className="text-sm text-amber-400">
-            {teammateUsername} disconnected — you can move alone
+          <p data-testid="game-status" className="text-sm text-slate-400">
+            {statusText}
           </p>
-        )}
-        <VoteActions
-          yourTeam={yourTeam}
-          you={view.you}
-          gameStatus={game.status}
-          pendingVotes={game.pendingVotes}
-          drawOffer={game.drawOffer}
-          requiresConfirmation={needsConfirmation}
-          onVote={onVote}
-        />
+          {teammateDisconnected && (
+            <p data-testid="teammate-disconnected" className="text-sm text-amber-400">
+              {teammateUsername} disconnected — you can move alone
+            </p>
+          )}
+          <VoteActions
+            yourTeam={yourTeam}
+            you={view.you}
+            gameStatus={game.status}
+            pendingVotes={game.pendingVotes}
+            drawOffer={game.drawOffer}
+            requiresConfirmation={needsConfirmation}
+            onVote={onVote}
+          />
+        </div>
         {/* §5.7: promotion is never offered here — `onPromote` omitted — since it's
             rejected outside LOBBY/TEAM_SELECT anyway (roomEngine.promoteSpectator). */}
         <Spectators spectators={view.spectators} seats={view.seats} />
