@@ -83,6 +83,15 @@ interface BoardProps {
   orientation?: 'white' | 'black';
   /** Overrides the wrapping div's sizing classes (default: a fixed 640px desktop cap). */
   sizeClassName?: string;
+  /**
+   * T-14: when set, the board is server-controlled — it always renders this exact FEN, and an
+   * attempted move calls `onMove` instead of applying locally, so nothing changes on screen
+   * until the server's next `serverFen` confirms it ("no optimistic commit", DESIGN.md §8 rule
+   * 2). The local `chess.js` mirror is kept in sync with `serverFen` so legal-move dots/rings/
+   * check-glow still render instantly (§2.3) — only the *commit* is deferred, not the hints.
+   */
+  serverFen?: string;
+  onMove?: ((from: Square, to: Square, promotion?: PromotionPiece) => void) | undefined;
 }
 
 function createGame(fen: string): Chess {
@@ -97,20 +106,33 @@ function createGame(fen: string): Chess {
 }
 
 /**
- * Local, non-networked board (`docs/DESIGN.md` M2 — no server round trip; that's T-13/T-14).
- * Owns its own `chess.js` game and drives `react-chessboard` as a fully controlled component:
- * every move is decided here first, then written back into `position`, so an illegal drop or
- * a promotion still awaiting a piece choice never touches the board's rendered FEN.
+ * Fully controlled `react-chessboard` wrapper: every move is decided here first, then written
+ * back into `position`, so an illegal drop or a promotion still awaiting a piece choice never
+ * touches the rendered FEN. Two modes, chosen by whether `serverFen` is passed:
+ *  - **Local** (`docs/DESIGN.md` M2, T-11/T-12): no `serverFen` — owns its own `chess.js` game
+ *    and commits moves locally. Used by the local sandbox (`?fen=` in `App.tsx`).
+ *  - **Networked** (T-14): `serverFen` set — renders exactly that FEN and calls `onMove` instead
+ *    of committing, so nothing moves on screen until the server confirms it. Used by `GameScreen`.
  */
 export function Board({
   initialFen = START_FEN,
   orientation = 'white',
   sizeClassName = 'mx-auto w-full max-w-[640px]',
+  serverFen,
+  onMove,
 }: BoardProps) {
-  const gameRef = useRef(createGame(initialFen));
+  const networked = serverFen !== undefined;
+  const gameRef = useRef(createGame(serverFen ?? initialFen));
+  // Ref-only resync during render, same pattern as React's "adjust state while rendering"
+  // recipe — no `setState` here, so it can't loop, and it keeps `game` correct for this same
+  // render pass instead of lagging a frame behind in an effect.
+  if (networked && gameRef.current.fen() !== serverFen) {
+    gameRef.current = createGame(serverFen);
+  }
   const game = gameRef.current;
 
-  const [fen, setFen] = useState(() => game.fen());
+  const [internalFen, setInternalFen] = useState(() => game.fen());
+  const fen = networked ? (serverFen as string) : internalFen;
   const [selected, setSelected] = useState<Square | null>(null);
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
@@ -148,12 +170,21 @@ export function Board({
   const SquareContent = useMemo(() => makeSquareContent(dotSquares, ringSquares), [dotSquares, ringSquares]);
 
   function commitMove(from: Square, to: Square, promotion?: PromotionPiece): boolean {
+    if (networked) {
+      // No optimistic apply: `onMove` sends `propose` and the board stays exactly at
+      // `serverFen` until the server's own broadcast moves it (§8 rule 2).
+      onMove?.(from, to, promotion);
+      setSelected(null);
+      setPendingPromotion(null);
+      return false;
+    }
+
     try {
       game.move(promotion ? { from, to, promotion } : { from, to });
     } catch {
       return false;
     }
-    setFen(game.fen());
+    setInternalFen(game.fen());
     setLastMove({ from, to });
     setSelected(null);
     setPendingPromotion(null);

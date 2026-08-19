@@ -11,6 +11,7 @@ import {
   setConnected,
   setReady,
   setTeam,
+  startOneVOneGame,
   updateSettings,
 } from './roomEngine.js';
 import type { RoomJoiner } from './roomEngine.js';
@@ -319,6 +320,52 @@ describe('canStartGame', () => {
 
   it('ignores unassigned seats sitting alongside a valid split', () => {
     expect(canStartGame(seatsWithTeams(['WHITE', 'BLACK', null]))).toBe(true);
+  });
+});
+
+describe('startOneVOneGame', () => {
+  it('assigns the host WHITE, the other seat BLACK, and builds the initial game state', () => {
+    const room = roomWithSeats(2);
+    const result = startOneVOneGame(room, 'seat-0');
+    if (!result.ok) throw new Error('expected success');
+
+    expect(result.value.phase).toBe('IN_GAME');
+    expect(result.value.seats.map((s) => [s.seatId, s.team])).toEqual([
+      ['seat-0', 'WHITE'],
+      ['seat-1', 'BLACK'],
+    ]);
+    expect(result.value.game).toMatchObject({
+      fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      sideToMove: 'WHITE',
+      status: 'ACTIVE',
+    });
+  });
+
+  it('rejects a non-host actor', () => {
+    const room = roomWithSeats(2);
+    expect(startOneVOneGame(room, 'seat-1')).toEqual({ ok: false, code: 'NOT_HOST' });
+  });
+
+  it('rejects an unknown seat', () => {
+    const room = roomWithSeats(2);
+    expect(startOneVOneGame(room, 'nope')).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+
+  it('rejects starting outside the LOBBY phase', () => {
+    const room = roomWithSeats(2);
+    const started = startOneVOneGame(room, 'seat-0');
+    if (!started.ok) throw new Error('setup expected success');
+
+    expect(startOneVOneGame(started.value, 'seat-0')).toEqual({ ok: false, code: 'INVALID_PHASE' });
+  });
+
+  it.each([
+    ['one seat', 1],
+    ['three seats', 3],
+    ['four seats', 4],
+  ])('rejects with %s (not exactly 1v1)', (_label, count) => {
+    const room = roomWithSeats(count);
+    expect(startOneVOneGame(room, 'seat-0')).toEqual({ ok: false, code: 'TEAM_SIZE_INVALID' });
   });
 });
 

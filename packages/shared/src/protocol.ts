@@ -369,6 +369,7 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'INVALID_PHASE',
   'INVALID_MESSAGE',
   'NOT_JOINED',
+  'TEAM_SIZE_INVALID',
 ]);
 
 export const errorMessageSchema = z.object({

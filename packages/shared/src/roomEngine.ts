@@ -6,12 +6,12 @@
  * (the Durable Object, per T-09's "join handshake issues seatId +
  * resumeToken") and passed in, so every outcome here is deterministic.
  *
- * `canStartGame` is a pure predicate only — it does not transition the room
- * to `IN_GAME` or build a `GameState`. That transition needs the initial FEN
- * and clock setup, which is `gameEngine.startGame`'s job (T-13, not yet
- * built); whichever task wires up the `start_game` message composes this
- * predicate with that function.
+ * `canStartGame` is a pure predicate over team composition, for T-17's future
+ * team-select-validated `start_game`. `startOneVOneGame` (T-14) is a
+ * separate, narrower transition to `IN_GAME` for the 1v1 case only — see its
+ * own doc comment for why it doesn't reuse `canStartGame`.
  */
+import { startGame as buildInitialGameState } from './gameEngine.js';
 import type { ErrorCode, Room, RoomCode, RoomSettings, Seat, SeatId, Spectator, Team } from './types.js';
 
 export const MAX_SEATS = 4;
@@ -225,4 +225,44 @@ export function canStartGame(seats: Seat[]): boolean {
   const white = seats.filter((s) => s.team === 'WHITE').length;
   const black = seats.filter((s) => s.team === 'BLACK').length;
   return white >= 1 && white <= MAX_TEAM_SIZE && black >= 1 && black <= MAX_TEAM_SIZE;
+}
+
+/**
+ * Host-only `start_game` for the 1v1 case (T-14 — "Networked 1v1", the
+ * milestone `docs/DESIGN.md` §13 deliberately sequences before Team Select).
+ * No FIFA screen exists yet for players to pick sides, so with exactly two
+ * seats the join order decides colors: the host is WHITE, the other seat
+ * BLACK — matching §4.2's "Team 1 is White" default. `settings.randomizeColors`
+ * isn't applied here: `update_settings` isn't wired server-side until T-17
+ * (see TASKS.md's T-09 Finding), so it can never actually be `true` yet.
+ *
+ * `canStartGame`'s four-composition predicate deliberately isn't reused here
+ * — every seat's `team` is still `null` at this point (nothing assigns one
+ * before this task), and 2v2/2v1 compositions have no propose/accept
+ * mechanism to actually play with (T-18). T-17 replaces this whole function
+ * with the real team-select-validated transition.
+ *
+ * No `now` parameter: nothing here is time-derived — `game.clock.turnStartedAt`
+ * stays `null` until White's first commit (§4.6), same reasoning T-13 used to
+ * drop `now` from `gameEngine.startGame`.
+ */
+export function startOneVOneGame(room: Room, actorSeatId: SeatId): RoomEngineResult<Room> {
+  const actor = room.seats.find((s) => s.seatId === actorSeatId);
+  if (!actor) return fail('SEAT_NOT_FOUND');
+  if (!actor.isHost) return fail('NOT_HOST');
+  if (room.phase !== 'LOBBY') return fail('INVALID_PHASE');
+  if (room.seats.length !== 2) return fail('TEAM_SIZE_INVALID');
+
+  const [white, black] = room.seats;
+  const seats: Seat[] = [
+    { ...white!, team: 'WHITE' },
+    { ...black!, team: 'BLACK' },
+  ];
+
+  return ok({
+    ...room,
+    phase: 'IN_GAME',
+    seats,
+    game: buildInitialGameState(room.settings.timeControl),
+  });
 }

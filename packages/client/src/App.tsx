@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { generateRoomCode, parseServerMessage, type RoomSettings } from '@duo/shared';
+import { generateRoomCode, parseServerMessage, type PromotionPiece, type RoomSettings, type Square } from '@duo/shared';
 import { buildRoomUrl, connectSocket, sendMessage } from './net/socket.js';
 import { BoardScreen } from './screens/BoardScreen.js';
+import { GameScreen } from './screens/GameScreen.js';
 import { Home } from './screens/Home.js';
 import { Lobby } from './screens/Lobby.js';
 import { useRoomStore } from './store.js';
@@ -65,6 +66,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'update_settings', settings });
   };
 
+  const handleMove = (from: Square, to: Square, promotion?: PromotionPiece) => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'propose', from, to, promotion });
+  };
+
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
   }
@@ -78,6 +83,10 @@ export function App() {
         busy={status === 'connecting'}
       />
     );
+  }
+
+  if (view.phase === 'IN_GAME') {
+    return <GameScreen view={view} onMove={handleMove} />;
   }
 
   return <Lobby view={view} onStart={handleStart} onUpdateSettings={handleUpdateSettings} />;
