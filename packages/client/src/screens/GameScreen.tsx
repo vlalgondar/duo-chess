@@ -50,15 +50,20 @@ const ANNOTATION_COLORS: Record<'WHITE' | 'BLACK', Record<AnnotationColor, strin
 // Same §5.10 mobile formula BoardScreen's sandbox uses — see that file's comment for why the
 // 220px deduction exists (bottom-sheet peeked height + flip-button headroom below 900px).
 // Desktop (>=900px) keeps `w-full` (so a narrow-but->=900px window still shrinks the board to
-// fit its actual flex column, same as before) but replaces the flat `max-w-[560px]` cap with a
-// "min(cap, calc(100dvh - chrome))" ceiling: the header (sound/status/vote row), two player-name
-// bars, two clocks, and `p-6` main padding add up to ~296px of non-board chrome, rounded up to
-// 340px for slack — without this the board's own fixed 560px cap plus that chrome regularly
-// exceeds real browser window heights, forcing the whole page to scroll. `max(360px, ...)`
-// floors the board so it never shrinks to something unplayable on a very short window (a little
-// scroll there is the better trade-off).
+// fit its actual flex column, same as before) but replaces the flat cap with a
+// "min(cap, calc(100dvh - chrome))" ceiling. Chrome tally at >=900px, after the roster names
+// were folded into the clock rows below (each row: 44 for the clock's text-xl/py-1.5/border-2):
+// `p-6` (48) + header row (44) + gap (12) + clock row (44) + gap (12) + gap (12) + clock row
+// (44) = 216px, rounded up to 250 for slack that covers `Spectators` rendering (+28) or the
+// header wrapping to two lines on a narrow-but-desktop width (+52) — neither of which the specs
+// exercise at 1280x720, but both are real states. `720` (was `560`) is the new flat cap; it only
+// binds on very tall monitors (>=~970px viewport height), so raising it never shrinks anything.
+// `max(360px, ...)` floors the board so it never shrinks to something unplayable on a very short
+// window (a little scroll there is the better trade-off) — hence `min-h-dvh` below, not `h-dvh`:
+// unlike ResultScreen's row layout, this column uses `justify-center`, and `h-dvh` would make a
+// too-short window's overflow unreachable the same way ResultScreen's comment calls out.
 const BOARD_SIZE_CLASSNAME =
-  'mx-auto w-[min(100vw,calc(100dvh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[max(360px,min(560px,calc(100dvh_-_340px)))]';
+  'mx-auto w-[min(100vw,calc(100dvh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[max(360px,min(720px,calc(100dvh_-_250px)))]';
 
 /**
  * Networked game screen (T-14, propose/accept UI wired up in T-20). No optimistic commit: the
@@ -167,7 +172,7 @@ export function GameScreen({
       data-testid="game-shell"
       className="flex min-h-dvh flex-col min-[900px]:flex-row min-[900px]:items-stretch min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
     >
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:p-0">
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:gap-3 min-[900px]:p-0">
         {/* Mobile only: at 390px wide this column is ~870px tall (well past any phone's
             dvh), so a player scrolls to clear the fixed BottomSheet off the board — which
             used to carry the header, including Resign, off the top edge with it. Pinning
@@ -209,49 +214,64 @@ export function GameScreen({
             rejected outside LOBBY/TEAM_SELECT anyway (roomEngine.promoteSpectator). */}
         <Spectators spectators={view.spectators} seats={view.seats} />
 
-        {/* §5.5's player-name bars ("[Team 2: alice, bob]" above the board, "[Team 1: you,
-            carol]" below) — desktop only, so the mobile vertical budget and the 220px board
-            deduction above are untouched. */}
-        {topRoster.length > 0 && (
-          <p className="hidden text-xs text-text-dim min-[900px]:block">
-            {top === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {topRoster.join(', ')}
-          </p>
-        )}
-        {showClocks && (
-          <Clock
-            clock={game.clock}
-            team={top}
-            sideToMove={game.sideToMove}
-            serverClockOffsetMs={serverClockOffsetMs}
-            active={game.status === 'ACTIVE' && game.sideToMove === top}
+        {/* One sizing wrapper carries `BOARD_SIZE_CLASSNAME` for all three children instead of
+            repeating the calc() on each — `Board` just takes `w-full`. Default `align-items:
+            stretch` is what keeps the name/clock rows aligned with the board's own edges. §5.5's
+            player-name bars ("[Team 2: alice, bob]" above the board, "[Team 1: you, carol]"
+            below) stay desktop-only (`hidden … min-[900px]:block`); each row is gated on the
+            roster or the clock, not on `showClocks` alone, so names still show in an Unlimited
+            game. On mobile the wrapper is just a centered `Clock` per row — pixel-identical to
+            before this merge. */}
+        <div className={`${BOARD_SIZE_CLASSNAME} flex flex-col gap-4 min-[900px]:gap-3`}>
+          {(topRoster.length > 0 || showClocks) && (
+            <div className="flex items-center justify-center gap-3 min-[900px]:justify-between">
+              {topRoster.length > 0 && (
+                <p className="hidden text-xs text-text-dim min-[900px]:block">
+                  {top === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {topRoster.join(', ')}
+                </p>
+              )}
+              {showClocks && (
+                <Clock
+                  clock={game.clock}
+                  team={top}
+                  sideToMove={game.sideToMove}
+                  serverClockOffsetMs={serverClockOffsetMs}
+                  active={game.status === 'ACTIVE' && game.sideToMove === top}
+                />
+              )}
+            </div>
+          )}
+          <Board
+            serverFen={game.fen}
+            orientation={orientation}
+            onMove={locked ? undefined : onMove}
+            locked={locked}
+            proposal={boardProposal}
+            annotations={view.annotations}
+            ownAnnotationColor={ownAnnotationColor}
+            annotationColors={yourTeam ? ANNOTATION_COLORS[yourTeam] : undefined}
+            onAnnotationsChange={onAnnotate}
+            sizeClassName="w-full"
           />
-        )}
-        <Board
-          serverFen={game.fen}
-          orientation={orientation}
-          onMove={locked ? undefined : onMove}
-          locked={locked}
-          proposal={boardProposal}
-          annotations={view.annotations}
-          ownAnnotationColor={ownAnnotationColor}
-          annotationColors={yourTeam ? ANNOTATION_COLORS[yourTeam] : undefined}
-          onAnnotationsChange={onAnnotate}
-          sizeClassName={BOARD_SIZE_CLASSNAME}
-        />
-        {showClocks && (
-          <Clock
-            clock={game.clock}
-            team={bottom}
-            sideToMove={game.sideToMove}
-            serverClockOffsetMs={serverClockOffsetMs}
-            active={game.status === 'ACTIVE' && game.sideToMove === bottom}
-          />
-        )}
-        {bottomRoster.length > 0 && (
-          <p className="hidden text-xs text-text-dim min-[900px]:block">
-            {bottom === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {bottomRoster.join(', ')}
-          </p>
-        )}
+          {(bottomRoster.length > 0 || showClocks) && (
+            <div className="flex items-center justify-center gap-3 min-[900px]:justify-between">
+              {bottomRoster.length > 0 && (
+                <p className="hidden text-xs text-text-dim min-[900px]:block">
+                  {bottom === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {bottomRoster.join(', ')}
+                </p>
+              )}
+              {showClocks && (
+                <Clock
+                  clock={game.clock}
+                  team={bottom}
+                  sideToMove={game.sideToMove}
+                  serverClockOffsetMs={serverClockOffsetMs}
+                  active={game.status === 'ACTIVE' && game.sideToMove === bottom}
+                />
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* `items-stretch` on the row above makes this match the board column's own rendered

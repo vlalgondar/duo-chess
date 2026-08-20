@@ -7,14 +7,14 @@ import { Button } from './Button.js';
  * `screens/Lobby.tsx` (its original, accidental home) since `TeamSelect` and `ResultScreen`
  * both import it too.
  */
-export function LeaveButton({ onLeave }: { onLeave: () => void }) {
+export function LeaveButton({ onLeave, className = 'w-64' }: { onLeave: () => void; className?: string }) {
   return (
     <Button
       data-testid="leave-button"
       type="button"
       variant="secondary"
       onClick={onLeave}
-      className="w-64"
+      className={className}
     >
       <LogOut className="h-4 w-4" aria-hidden="true" />
       Leave room

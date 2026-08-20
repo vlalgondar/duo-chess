@@ -54,6 +54,7 @@ export function Home({ onCreate, onJoin, joinError, busy }: HomeProps) {
   const usernameValid =
     trimmedUsername.length >= USERNAME_MIN_LENGTH && trimmedUsername.length <= USERNAME_MAX_LENGTH;
   const codeValid = code.length === ROOM_CODE_LENGTH;
+  const joinReady = usernameValid && codeValid && !busy;
 
   const persistUsername = () => {
     window.localStorage.setItem(USERNAME_STORAGE_KEY, trimmedUsername);
@@ -121,13 +122,13 @@ export function Home({ onCreate, onJoin, joinError, busy }: HomeProps) {
               setCode(sanitizeCode(event.clipboardData.getData('text')));
             }}
             maxLength={ROOM_CODE_LENGTH}
-            className="text-center font-mono text-lg uppercase tracking-[0.3em]"
+            className={`text-center font-mono text-lg uppercase tracking-[0.3em] ${codeValid ? 'border-accent' : ''}`}
           />
           <Button
             data-testid="join-button"
             type="submit"
-            variant="secondary"
-            disabled={!usernameValid || !codeValid || busy}
+            variant={joinReady ? 'accent' : 'secondary'}
+            disabled={!joinReady}
             className="w-full"
           >
             Join room

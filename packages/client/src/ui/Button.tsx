@@ -1,6 +1,6 @@
 import { forwardRef, type ButtonHTMLAttributes } from 'react';
 
-type Variant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'link';
+type Variant = 'primary' | 'secondary' | 'accent' | 'danger' | 'ghost' | 'link';
 type Size = 'md' | 'lg';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -11,6 +11,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 const VARIANT_CLASS: Record<Variant, string> = {
   primary: 'bg-primary text-white hover:bg-primary-hi disabled:opacity-50',
   secondary: 'bg-surface-2 text-text hover:bg-line-strong disabled:opacity-40',
+  // Gold — the same accent used for clocks, proposals, and the focus ring — signals "ready to
+  // submit" without borrowing `primary`'s green, which Create Room already owns on Home.
+  accent: 'bg-accent text-bg hover:bg-accent/90 disabled:opacity-40',
   danger: 'bg-danger text-white hover:bg-danger-hi disabled:opacity-40',
   ghost: 'bg-transparent text-text border border-line hover:bg-surface-2 disabled:opacity-40',
   link: 'bg-transparent text-accent underline underline-offset-2 hover:text-accent/80 disabled:opacity-40',

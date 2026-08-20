@@ -4,7 +4,14 @@ import { GAME_OVER_REASON, type ClientRoomView } from '@duo/shared';
 import { Board } from '../components/Board.js';
 import { LeaveButton } from '../ui/LeaveButton.js';
 import { Button } from '../ui/Button.js';
+import { Panel } from '../ui/Panel.js';
 import { Check, Copy } from '../ui/Icon.js';
+
+// Chrome tally at >=900px: `p-6` (48) + banner (text-2xl 32 + py-3 24 + border 2 = 58) +
+// `gap-6` (24) = 130; 150 leaves 20px slack. Mirrors GameScreen's `BOARD_SIZE_CLASSNAME`
+// deduction comment — see that file for why this is a hand-tallied constant, not derived.
+const BOARD_SIZE_CLASSNAME =
+  'mx-auto w-full max-w-[420px] min-[900px]:max-w-[max(320px,min(720px,calc(100dvh_-_150px)))]';
 
 interface ResultScreenProps {
   view: ClientRoomView;
@@ -44,27 +51,47 @@ export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
       : 'border-line bg-surface text-text';
 
   return (
-    <main className="flex min-h-dvh flex-col items-center gap-6 p-6">
-      <h1
-        data-testid="result-banner"
-        className={`rounded-xl border px-6 py-3 text-center font-display text-2xl font-bold ${bannerClass}`}
-      >
-        {outcome} — {reason}
-      </h1>
+    <main className="flex min-h-dvh flex-col items-center gap-6 p-6 min-[900px]:h-dvh min-[900px]:flex-row min-[900px]:items-stretch min-[900px]:justify-center">
+      {/* `flex-1` (mirrors GameScreen's board column) — without it the row gives this column
+          only its shrink-to-fit content width, which circularly caps `Board`'s own `w-full` at
+          the banner's intrinsic width instead of the available row space.
+          `justify-center-safe`, not `justify-center`: on a window too short for banner+board,
+          plain centering overflows upward — which is unreachable, since the page can't scroll
+          past the top of a centered flex item. Safe alignment degrades to top-aligned instead. */}
+      <div className="flex min-w-0 flex-col items-center gap-6 min-[900px]:flex-1 min-[900px]:justify-center-safe">
+        <h1
+          data-testid="result-banner"
+          className={`rounded-xl border px-6 py-3 text-center font-display text-2xl font-bold ${bannerClass}`}
+        >
+          {outcome} — {reason}
+        </h1>
 
-      <Board serverFen={game.fen} orientation={orientation} locked sizeClassName="mx-auto w-full max-w-[420px]" />
+        <Board serverFen={game.fen} orientation={orientation} locked sizeClassName={BOARD_SIZE_CLASSNAME} />
+      </div>
 
-      <MoveList moveHistory={game.moveHistory} />
+      {/* `contents` below 900px keeps these as plain siblings of the banner/board in `main`'s
+          own centered column — pixel-identical to the pre-desktop-layout markup. At >=900px it
+          becomes the real right-hand panel; `main`'s `h-dvh` + `items-stretch` give it a
+          definite height so the move list can scroll internally instead of growing the page. */}
+      <Panel className="contents min-[900px]:flex min-[900px]:w-72 min-[900px]:min-h-0 min-[900px]:flex-col min-[900px]:gap-3 min-[900px]:p-3">
+        <MoveList moveHistory={game.moveHistory} />
 
-      <PgnCopyButton moveHistory={game.moveHistory} />
+        <PgnCopyButton moveHistory={game.moveHistory} />
 
-      {you && (
-        <Button data-testid="rematch-button" variant="primary" size="lg" onClick={onRematch} className="w-64">
-          Rematch
-        </Button>
-      )}
+        {you && (
+          <Button
+            data-testid="rematch-button"
+            variant="primary"
+            size="lg"
+            onClick={onRematch}
+            className="w-64 min-[900px]:w-full min-[900px]:shrink-0"
+          >
+            Rematch
+          </Button>
+        )}
 
-      <LeaveButton onLeave={onLeave} />
+        <LeaveButton onLeave={onLeave} className="w-64 min-[900px]:w-full min-[900px]:shrink-0" />
+      </Panel>
     </main>
   );
 }
@@ -76,7 +103,10 @@ function MoveList({ moveHistory }: { moveHistory: readonly string[] }) {
   }
 
   return (
-    <ol data-testid="move-list" className="flex w-full max-w-sm flex-col gap-1 rounded-xl border border-line bg-surface p-3 font-mono text-sm">
+    <ol
+      data-testid="move-list"
+      className="flex w-full max-w-sm max-h-40 flex-col gap-1 overflow-y-auto rounded-xl border border-line bg-surface p-3 font-mono text-sm min-[900px]:min-h-0 min-[900px]:max-h-none min-[900px]:max-w-none min-[900px]:flex-1 min-[900px]:overflow-y-auto min-[900px]:border-0 min-[900px]:bg-transparent min-[900px]:p-0"
+    >
       {rows.map((row) => (
         <li key={row.number} data-testid="move-row" className="flex gap-2">
           <span className="w-6 text-text-dim">{row.number}.</span>
