@@ -6,7 +6,9 @@ import {
   type ChatChannel,
   type ClientRoomView,
   type PromotionPiece,
+  type PublicSeat,
   type Square,
+  type Team,
   type TeamVoteKind,
   type WireAnnotation,
 } from '@duo/shared';
@@ -18,6 +20,7 @@ import { SoundToggle } from '../components/SoundToggle.js';
 import { Spectators } from '../components/Spectators.js';
 import { TeamPanel } from '../components/TeamPanel.js';
 import { VoteActions } from '../components/VoteActions.js';
+import { Crown } from '../ui/Icon.js';
 import { Panel } from '../ui/Panel.js';
 
 interface GameScreenProps {
@@ -164,8 +167,8 @@ export function GameScreen({
   const chatProps = { messages: view.chat, teamChatAvailable, onSend: onSendChat };
 
   const isFinished = game.status !== 'ACTIVE';
-  const topRoster = view.seats.filter((s) => s.team === top).map((s) => s.username);
-  const bottomRoster = view.seats.filter((s) => s.team === bottom).map((s) => s.username);
+  const topRoster = view.seats.filter((s) => s.team === top);
+  const bottomRoster = view.seats.filter((s) => s.team === bottom);
 
   return (
     <main
@@ -225,11 +228,7 @@ export function GameScreen({
         <div className={`${BOARD_SIZE_CLASSNAME} flex flex-col gap-4 min-[900px]:gap-3`}>
           {(topRoster.length > 0 || showClocks) && (
             <div className="flex items-center justify-center gap-3 min-[900px]:justify-between">
-              {topRoster.length > 0 && (
-                <p className="hidden text-xs text-text-dim min-[900px]:block">
-                  {top === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {topRoster.join(', ')}
-                </p>
-              )}
+              {topRoster.length > 0 && <PlayerBar team={top} roster={topRoster} />}
               {showClocks && (
                 <Clock
                   clock={game.clock}
@@ -255,11 +254,7 @@ export function GameScreen({
           />
           {(bottomRoster.length > 0 || showClocks) && (
             <div className="flex items-center justify-center gap-3 min-[900px]:justify-between">
-              {bottomRoster.length > 0 && (
-                <p className="hidden text-xs text-text-dim min-[900px]:block">
-                  {bottom === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {bottomRoster.join(', ')}
-                </p>
-              )}
+              {bottomRoster.length > 0 && <PlayerBar team={bottom} roster={bottomRoster} />}
               {showClocks && (
                 <Clock
                   clock={game.clock}
@@ -292,5 +287,38 @@ export function GameScreen({
 
       <BottomSheet teamPanel={teamPanelProps} chat={chatProps} />
     </main>
+  );
+}
+
+interface PlayerBarProps {
+  team: Team;
+  roster: PublicSeat[];
+}
+
+/**
+ * §5.5's player-name bar, restyled to match Team Select's own "team identity" language (a
+ * `TEAM_ACCENT`-tinted `Crown` plus a matching border, `TeamSelect.tsx`'s `TeamColumn`) instead
+ * of the plain `text-xs text-text-dim` line it replaces. Deliberately stays under the `Clock`
+ * badge's 44px (`border-2 px-4 py-1.5 text-xl`) that `BOARD_SIZE_CLASSNAME`'s chrome tally is
+ * already budgeting for `44` — this pill is `border` 2 + `py-1.5` 12 + `text-sm` 20 = 34px, so
+ * the board-sizing formula above needs no change. `truncate`/`whitespace-nowrap` guard the one
+ * way this could still blow the tally: wrapping to a second line on a long roster.
+ */
+function PlayerBar({ team, roster }: PlayerBarProps) {
+  return (
+    <p
+      data-testid={`player-bar-${team.toLowerCase()}`}
+      className="hidden min-w-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-surface px-3 py-1.5 min-[900px]:flex"
+      style={{ borderLeftColor: TEAM_ACCENT[team], borderLeftWidth: '3px' }}
+    >
+      <Crown className="h-4 w-4 shrink-0" style={{ color: TEAM_ACCENT[team] }} aria-hidden="true" />
+      <span className="font-display text-sm font-semibold text-text-muted">
+        {team === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}
+      </span>
+      <span className="text-text-dim" aria-hidden="true">
+        ·
+      </span>
+      <span className="truncate text-sm font-semibold text-text">{roster.map((s) => s.username).join(', ')}</span>
+    </p>
   );
 }
