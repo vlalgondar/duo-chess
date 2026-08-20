@@ -33,8 +33,12 @@ function nextMessage(ws: WebSocket): Promise<Record<string, unknown>> {
   });
 }
 
-function join(ws: WebSocket, code: string, username: string): void {
-  ws.send(JSON.stringify({ t: 'join', code, username }));
+// T-30: these tests exercise transport plumbing (socket sharing, origin checks, routing),
+// not create-vs-join semantics — `create` defaults to `true` so a fresh code's first join
+// still succeeds, same as before that distinction existed; pass `false` for a second joiner
+// sharing an already-created code.
+function join(ws: WebSocket, code: string, username: string, create = true): void {
+  ws.send(JSON.stringify({ t: 'join', code, username, ...(create ? { create: true } : {}) }));
 }
 
 describe('websocket transport', () => {
@@ -60,7 +64,7 @@ describe('websocket transport', () => {
     await nextMessage(wsA);
 
     const bReceived = nextMessage(wsB);
-    join(wsB, code, 'bob');
+    join(wsB, code, 'bob', false);
     const bState = await bReceived;
     expect(Array.isArray(bState.seats) && bState.seats.length).toBe(2);
 

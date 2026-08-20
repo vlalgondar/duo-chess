@@ -4,6 +4,7 @@ import {
   acceptMessageSchema,
   annotateMessageSchema,
   annotationUpdateMessageSchema,
+  backToLobbyMessageSchema,
   chatMessageBroadcastSchema,
   chatMessageInputSchema,
   clockSyncMessageSchema,
@@ -123,6 +124,12 @@ const CLIENT_CASES: Case[] = [
     invalid: { t: 'join', code: 'K7P2QX', username: 'a' },
   },
   {
+    name: 'join (create flag)',
+    schema: joinMessageSchema,
+    valid: { t: 'join', code: 'K7P2QX', username: 'alice', create: true },
+    invalid: { t: 'join', code: 'K7P2QX', username: 'alice', create: 'yes' },
+  },
+  {
     name: 'leave',
     schema: leaveMessageSchema,
     valid: { t: 'leave' },
@@ -163,6 +170,12 @@ const CLIENT_CASES: Case[] = [
     schema: randomizeTeamsMessageSchema,
     valid: { t: 'randomize_teams' },
     invalid: { t: 'randomize_team' },
+  },
+  {
+    name: 'back_to_lobby',
+    schema: backToLobbyMessageSchema,
+    valid: { t: 'back_to_lobby' },
+    invalid: { t: 'back_to_lobb' },
   },
   {
     name: 'propose',

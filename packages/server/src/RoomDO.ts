@@ -4,6 +4,7 @@ import {
   acceptProposal,
   advanceToTeamSelect,
   annotationColorFor,
+  backToLobby,
   connectedTeamSize,
   createRoom,
   expireVotes,
@@ -231,7 +232,7 @@ export class RoomDO extends DurableObject {
     const message = parsed.value;
 
     if (message.t === 'join') {
-      await this.handleJoin(ws, message.code, message.username, message.resumeToken);
+      await this.handleJoin(ws, message.code, message.username, message.resumeToken, message.create);
       return;
     }
 
@@ -263,6 +264,11 @@ export class RoomDO extends DurableObject {
 
     if (message.t === 'randomize_teams') {
       await this.handleRandomizeTeams(ws, attachment.seatId, message.nonce);
+      return;
+    }
+
+    if (message.t === 'back_to_lobby') {
+      await this.handleBackToLobby(ws, attachment.seatId, message.nonce);
       return;
     }
 
@@ -415,6 +421,26 @@ export class RoomDO extends DurableObject {
       return;
     }
     const result = randomizeTeams(this.room, seatId, Math.random);
+    if (!result.ok) {
+      this.sendError(ws, result.code, result.code, nonce);
+      return;
+    }
+    this.room = result.value;
+    await this.persist();
+    await this.broadcastState();
+  }
+
+  /**
+   * `back_to_lobby`: host-only `TEAM_SELECT` -> `LOBBY`, the reverse of `start_game`'s
+   * `LOBBY` -> `TEAM_SELECT` leg. `roomEngine.backToLobby` clears every seat's team and
+   * ready flag, same "fresh slate" reasoning as a first-time host reaching Team Select.
+   */
+  private async handleBackToLobby(ws: WebSocket, seatId: string, nonce?: string): Promise<void> {
+    if (!this.room) {
+      this.sendError(ws, 'SEAT_NOT_FOUND', 'no room', nonce);
+      return;
+    }
+    const result = backToLobby(this.room, seatId);
     if (!result.ok) {
       this.sendError(ws, result.code, result.code, nonce);
       return;
@@ -1071,7 +1097,13 @@ export class RoomDO extends DurableObject {
     console.error('RoomDO websocket error', error);
   }
 
-  private async handleJoin(ws: WebSocket, code: string, username: string, resumeToken?: string): Promise<void> {
+  private async handleJoin(
+    ws: WebSocket,
+    code: string,
+    username: string,
+    resumeToken?: string,
+    create?: boolean,
+  ): Promise<void> {
     if (isSocketAttachment(ws.deserializeAttachment())) {
       // Already joined on this socket — treat a repeat `join` as a resync request.
       await this.broadcastState();
@@ -1094,6 +1126,20 @@ export class RoomDO extends DurableObject {
         return;
       }
       // Stale or unknown token: fall through and join fresh.
+    }
+
+    // T-30: a room only ever comes into existence through explicit create
+    // intent — otherwise a typo'd (or expired, per `expireRoom`) code would
+    // silently stand up an empty lobby with the typist as host. Neither
+    // branch touches `this.room`, so a rejected join leaves no tombstone
+    // behind for the next, possibly-correct, attempt.
+    if (!this.room && !create) {
+      this.sendError(ws, 'ROOM_NOT_FOUND', "that room doesn't exist");
+      return;
+    }
+    if (this.room && create) {
+      this.sendError(ws, 'ROOM_CODE_TAKEN', 'room code already in use');
+      return;
     }
 
     const seatId = crypto.randomUUID();

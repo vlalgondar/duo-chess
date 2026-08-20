@@ -17,6 +17,14 @@ export interface ConnectOptions {
   readonly username: string;
   readonly resumeToken?: string;
   readonly origin?: string;
+  /**
+   * T-30's `join.create` flag. Defaults to `true` on a `TestRoom`'s first
+   * `connect()` and `false` on every one after — mirrors reality (the host
+   * creates, guests join) so the ~16 existing test files calling `connect()`
+   * without opinions on `create` keep working unchanged. Pass explicitly to
+   * exercise `ROOM_NOT_FOUND` / `ROOM_CODE_TAKEN`.
+   */
+  readonly create?: boolean;
 }
 
 export interface ExpectOptions {
@@ -124,6 +132,8 @@ export class TestClient {
 export class TestRoom {
   readonly code: string;
   private readonly stub: DurableObjectStub<RoomDO>;
+  /** Tracks whether `connect()` has been called yet, for the default `create` below. */
+  private everConnected = false;
 
   constructor(code: string, stub: DurableObjectStub<RoomDO>) {
     this.code = code;
@@ -131,6 +141,9 @@ export class TestRoom {
   }
 
   async connect(opts: ConnectOptions): Promise<TestClient> {
+    const create = opts.create ?? !this.everConnected;
+    this.everConnected = true;
+
     const request = new Request(`http://example.com/ws/${this.code}`, {
       headers: { Upgrade: 'websocket', Origin: opts.origin ?? DEFAULT_ORIGIN },
     });
@@ -147,6 +160,7 @@ export class TestRoom {
       code: this.code,
       username: opts.username,
       ...(opts.resumeToken ? { resumeToken: opts.resumeToken } : {}),
+      ...(create ? { create: true } : {}),
     });
     return client;
   }

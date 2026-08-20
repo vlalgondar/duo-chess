@@ -383,6 +383,26 @@ export function startGameFromTeamSelect(
 }
 
 /**
+ * Host-only `TEAM_SELECT` -> `LOBBY` (the reverse of `advanceToTeamSelect`) — lets the
+ * host get back to the Lobby's settings (time control, spectators, disconnect grace)
+ * without abandoning the room. Team assignments and ready state are cleared, not
+ * carried over: unlike `rematch`'s "retained" settings (a genuinely fresh game against
+ * the same picks), the Lobby is a *pre*-team-select screen, so re-entering Team Select
+ * later should start from the same blank slate a first-time host sees — a stale pick
+ * from before (especially one belonging to a seat that's since left) has no business
+ * silently surviving a trip back through the Lobby.
+ */
+export function backToLobby(room: Room, actorSeatId: SeatId): RoomEngineResult<Room> {
+  const actor = room.seats.find((s) => s.seatId === actorSeatId);
+  if (!actor) return fail('SEAT_NOT_FOUND');
+  if (!actor.isHost) return fail('NOT_HOST');
+  if (room.phase !== 'TEAM_SELECT') return fail('INVALID_PHASE');
+
+  const seats = room.seats.map((s) => ({ ...s, team: null, ready: false }));
+  return ok({ ...room, phase: 'LOBBY', seats });
+}
+
+/**
  * Host-only "Randomize teams" (§5.4) — distinct from `settings.randomizeColors`
  * above: this reshuffles *who* is on which team, not which team plays which
  * color. `random` is required, not defaulted, for the same reason as above.

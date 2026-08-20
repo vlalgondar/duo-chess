@@ -13,6 +13,7 @@ interface TeamSelectProps {
   onStart: () => void;
   onRandomize: () => void;
   onPromoteSpectator: (publicId: string, team: Team) => void;
+  onBackToLobby: () => void;
   onLeave: () => void;
 }
 
@@ -39,6 +40,7 @@ export function TeamSelect({
   onStart,
   onRandomize,
   onPromoteSpectator,
+  onBackToLobby,
   onLeave,
 }: TeamSelectProps) {
   const you = view.seats.find((seat) => seat.publicId === view.you);
@@ -105,6 +107,20 @@ export function TeamSelect({
           className="text-sm text-emerald-400 underline"
         >
           Randomize teams
+        </button>
+      )}
+
+      {/* Host-only, the reverse of Lobby's own Start button — gets back to Lobby-only
+          settings (time control, spectators, disconnect grace) without abandoning the
+          room. Clears every team pick and ready flag (roomEngine.backToLobby). */}
+      {isHost && (
+        <button
+          type="button"
+          data-testid="back-to-lobby-button"
+          onClick={onBackToLobby}
+          className="flex h-11 w-64 items-center justify-center rounded bg-slate-700 text-sm font-semibold text-slate-300"
+        >
+          Back to Lobby
         </button>
       )}
 

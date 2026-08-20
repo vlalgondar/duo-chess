@@ -39,3 +39,16 @@ test('host creates a room, a guest joins via the deep link, and Start gates on p
     await hostContext.close();
   }
 });
+
+test('joining a code nobody created shows an error and stays on Home', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('username-input').fill('alice');
+  // Well-formed (passes client-side validation to even enable Join) but never created —
+  // T-30's ROOM_NOT_FOUND rejection, not a silent brand-new lobby.
+  await page.getByTestId('code-input').fill('ZZZZZZ');
+  await page.getByTestId('join-button').click();
+
+  await expect(page.getByTestId('join-error')).toBeVisible();
+  await expect(page.getByTestId('join-error')).toContainText("doesn't exist");
+  await expect(page.getByTestId('create-room-button')).toBeVisible();
+});

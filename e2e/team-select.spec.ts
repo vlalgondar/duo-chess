@@ -103,3 +103,49 @@ test('four contexts pick teams, a full-team attempt is refused, and the host sta
     await daveContext.close();
   }
 });
+
+test('the host can send everyone back to the Lobby, clearing team picks and ready state', async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  try {
+    await hostPage.goto('/');
+    await hostPage.getByTestId('username-input').fill('alice');
+    await hostPage.getByTestId('create-room-button').click();
+    const code = (await hostPage.getByTestId('room-code').textContent())?.trim();
+    if (!code) throw new Error('room code was not rendered in the lobby');
+
+    await guestPage.goto(`/join/${code}`);
+    await guestPage.getByTestId('username-input').fill('bob');
+    await guestPage.getByTestId('join-button').click();
+
+    await hostPage.getByTestId('start-button').click(); // LOBBY -> TEAM_SELECT
+    await expect(hostPage.getByTestId('team-select-shell')).toBeVisible();
+    await expect(guestPage.getByTestId('team-select-shell')).toBeVisible();
+
+    // Non-host never sees the control.
+    await expect(guestPage.getByTestId('back-to-lobby-button')).toHaveCount(0);
+
+    await cardFor(hostPage, 'alice').getByTestId('move-left').click();
+    await cardFor(guestPage, 'bob').getByTestId('move-right').click();
+    await cardFor(hostPage, 'alice').getByTestId('ready-toggle').click();
+    await cardFor(guestPage, 'bob').getByTestId('ready-toggle').click();
+    await expect(hostPage.getByTestId('start-game-button')).toBeEnabled();
+
+    await hostPage.getByTestId('back-to-lobby-button').click(); // TEAM_SELECT -> LOBBY
+    await expect(hostPage.getByTestId('roster')).toBeVisible();
+    await expect(guestPage.getByTestId('roster')).toBeVisible();
+
+    // Re-entering Team Select starts from a clean slate — nobody is still on a team
+    // or ready from before the trip back to the Lobby.
+    await hostPage.getByTestId('start-button').click(); // LOBBY -> TEAM_SELECT, again
+    await expect(cardFor(hostPage, 'alice')).toBeVisible();
+    await expect(hostPage.locator('[data-testid="unassigned-strip"] [data-testid="team-card"]')).toHaveCount(2);
+    await expect(hostPage.getByTestId('start-game-button')).toBeDisabled();
+  } finally {
+    await hostContext.close();
+    await guestContext.close();
+  }
+});

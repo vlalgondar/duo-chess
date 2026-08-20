@@ -114,4 +114,66 @@ describe('team select (T-17)', () => {
     alice.disconnect();
     bob.disconnect();
   });
+
+  it('rejects back_to_lobby from a non-host', async () => {
+    const room = await spawnRoom({ code: 'GM9ADF' });
+    const alice = await room.connect({ username: 'alice' }); // host
+    const bob = await room.connect({ username: 'bob' });
+    await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 2);
+
+    alice.send({ t: 'start_game' });
+    await alice.expect('state', (m) => m.phase === 'TEAM_SELECT');
+    await bob.expect('state', (m) => m.phase === 'TEAM_SELECT');
+
+    bob.send({ t: 'back_to_lobby' });
+    const error = await bob.expect('error');
+    expect(error.code).toBe('NOT_HOST');
+
+    alice.disconnect();
+    bob.disconnect();
+  });
+
+  it('back_to_lobby (host) returns TEAM_SELECT to LOBBY, clearing team picks and ready state', async () => {
+    const room = await spawnRoom({ code: 'GM9ADG' });
+    const alice = await room.connect({ username: 'alice' }); // host
+    const bob = await room.connect({ username: 'bob' });
+    await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 2);
+
+    alice.send({ t: 'start_game' });
+    await alice.expect('state', (m) => m.phase === 'TEAM_SELECT');
+    await bob.expect('state', (m) => m.phase === 'TEAM_SELECT');
+
+    alice.send({ t: 'set_team', team: 'WHITE' });
+    bob.send({ t: 'set_team', team: 'BLACK' });
+    alice.send({ t: 'set_ready', ready: true });
+    bob.send({ t: 'set_ready', ready: true });
+    await bob.expect('state', (m) => (m.seats as TestSeat[]).every((s) => s.ready));
+
+    alice.send({ t: 'back_to_lobby' });
+    const aliceState = await alice.expect('state', (m) => m.phase === 'LOBBY');
+    expect((aliceState.seats as TestSeat[]).every((s) => s.team === null && !s.ready)).toBe(true);
+    await bob.expect(
+      'state',
+      (m) => m.phase === 'LOBBY' && (m.seats as TestSeat[]).every((s) => s.team === null && !s.ready),
+    );
+
+    // The room still works from here — the host can send everyone back to Team Select.
+    alice.send({ t: 'start_game' });
+    await alice.expect('state', (m) => m.phase === 'TEAM_SELECT');
+
+    alice.disconnect();
+    bob.disconnect();
+  });
+
+  it('rejects back_to_lobby outside TEAM_SELECT', async () => {
+    const room = await spawnRoom({ code: 'GM9ADH' });
+    const alice = await room.connect({ username: 'alice' });
+    await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 1);
+
+    alice.send({ t: 'back_to_lobby' });
+    const error = await alice.expect('error');
+    expect(error.code).toBe('INVALID_PHASE');
+
+    alice.disconnect();
+  });
 });

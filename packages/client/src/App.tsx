@@ -36,6 +36,19 @@ const WS_BASE = import.meta.env.VITE_WS_URL;
 /** §8 rule 10: frequent enough for a live-feeling indicator, cheap enough to run forever. */
 const PING_INTERVAL_MS = 4_000;
 
+/** §6's "generate, check for collision, retry" — a hard cap so a run of colliding
+ * client-generated codes can't retry forever. */
+const MAX_CREATE_ATTEMPTS = 5;
+
+/** Maps a rejected join's `ErrorCode` to copy a user typing a code can act on; falls
+ * back to the server's own `message` for anything not worth a bespoke string. */
+function joinErrorMessage(code: string, fallback: string): string {
+  if (code === 'ROOM_NOT_FOUND') {
+    return "That room doesn't exist. Check the code, or tap Create Room to start your own.";
+  }
+  return fallback;
+}
+
 /** T-11's local board sandbox, reached via `?fen=<FEN>` — no room/server involved (see `BoardScreen`). */
 function readFenParam(): string | null {
   return new URLSearchParams(window.location.search).get('fen');
@@ -86,6 +99,13 @@ export function App() {
   // `onClose` below would see `hasJoinedRef.current === true` and start §9's
   // reconnect backoff, silently dialing back into the room just left.
   const intentionalLeaveRef = useRef(false);
+  // T-30: whether the in-flight `connect()` is a "Create Room" (vs. a join by
+  // code) — read by the `ROOM_CODE_TAKEN` retry below, which only applies to
+  // a client-generated code colliding with a live room, never to a user-typed
+  // one. `createAttemptRef` counts consecutive collisions so the retry loop
+  // (§6: "generate, check for collision, retry") can't spin forever.
+  const creatingRef = useRef(false);
+  const createAttemptRef = useRef(0);
 
   const clearReconnectTimer = () => {
     if (reconnectTimerRef.current !== null) {
@@ -103,10 +123,16 @@ export function App() {
    * function itself never does, so a retry's own `onClose` correctly keeps
    * retrying instead of looking like a fresh failed join.
    */
-  const openSocket = (code: string, username: string, resumeToken?: string) => {
+  const openSocket = (code: string, username: string, resumeToken?: string, create?: boolean) => {
     const ws = connectSocket(buildRoomUrl(WS_BASE, code), {
       onOpen: () => {
-        sendMessage(ws, { t: 'join', code, username, ...(resumeToken ? { resumeToken } : {}) });
+        sendMessage(ws, {
+          t: 'join',
+          code,
+          username,
+          ...(resumeToken ? { resumeToken } : {}),
+          ...(create ? { create: true } : {}),
+        });
       },
       onMessage: (data) => {
         let raw: unknown;
@@ -152,11 +178,37 @@ export function App() {
         } else if (parsed.value.t === 'pong') {
           setRttMs(Date.now() - parsed.value.ts);
         } else if (parsed.value.t === 'error') {
-          if (hasJoinedRef.current) {
-            setLastError(parsed.value.code);
-          } else {
-            setJoinError(parsed.value.message);
+          const { code: errorCode, message } = parsed.value;
+          if (errorCode === 'ROOM_CODE_TAKEN' && creatingRef.current) {
+            // §6's collision retry: a client-generated code landed on a live
+            // room — try again with a fresh one, capped so a run of
+            // collisions can't retry forever.
+            createAttemptRef.current += 1;
+            if (createAttemptRef.current < MAX_CREATE_ATTEMPTS) {
+              connect(generateRoomCode(), usernameRef.current, undefined, true);
+            } else {
+              setJoinError('Could not create a room right now — please try again.');
+              setStatus('closed');
+              ws.close();
+            }
+          } else if (errorCode === 'ROOM_NOT_FOUND') {
+            // Always bounces to Home, even mid-reconnect (a room can expire
+            // out from under a client that's retrying its way back in) — a
+            // dead room's resume token must not survive to redial it later.
+            intentionalLeaveRef.current = true;
+            clearReconnectTimer();
+            clearSession();
+            ws.close();
+            hasJoinedRef.current = false;
+            resetRoom();
+            setJoinError(joinErrorMessage(errorCode, message));
             setStatus('closed');
+          } else if (hasJoinedRef.current) {
+            setLastError(errorCode);
+          } else {
+            setJoinError(joinErrorMessage(errorCode, message));
+            setStatus('closed');
+            ws.close();
           }
         }
       },
@@ -181,10 +233,11 @@ export function App() {
     wsRef.current = ws;
   };
 
-  const connect = (code: string, username: string, resumeToken?: string) => {
+  const connect = (code: string, username: string, resumeToken?: string, create?: boolean) => {
     codeRef.current = code;
     usernameRef.current = username;
     resumeTokenRef.current = resumeToken;
+    creatingRef.current = !!create;
     reconnectAttemptRef.current = 0;
     lastSeqRef.current = null;
     hasJoinedRef.current = false;
@@ -192,7 +245,14 @@ export function App() {
     clearReconnectTimer();
     setStatus('connecting');
     setJoinError(null);
-    openSocket(code, username, resumeToken);
+    openSocket(code, username, resumeToken, create);
+  };
+
+  /** Home's "Create Room": resets the §6 collision-retry counter — the one thing `connect()`
+   * itself can't do, since its own internal retries call it again with a fresh code. */
+  const handleCreateRoom = (username: string) => {
+    createAttemptRef.current = 0;
+    connect(generateRoomCode(), username, undefined, true);
   };
 
   // §9: "resume tokens ... handles refreshes." A page load with a saved
@@ -265,6 +325,10 @@ export function App() {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'randomize_teams' });
   };
 
+  const handleBackToLobby = () => {
+    if (wsRef.current) sendMessage(wsRef.current, { t: 'back_to_lobby' });
+  };
+
   const handlePromoteSpectator = (publicId: string, team: Team) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'promote_spectator', publicId, team });
   };
@@ -330,7 +394,7 @@ export function App() {
   if (!view) {
     return (
       <Home
-        onCreate={(username) => connect(generateRoomCode(), username)}
+        onCreate={handleCreateRoom}
         onJoin={(username, code) => connect(code, username)}
         joinError={joinError}
         busy={status === 'connecting'}
@@ -382,6 +446,7 @@ export function App() {
           onStart={handleStart}
           onRandomize={handleRandomizeTeams}
           onPromoteSpectator={handlePromoteSpectator}
+          onBackToLobby={handleBackToLobby}
           onLeave={handleLeave}
         />
       </>

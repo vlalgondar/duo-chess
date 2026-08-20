@@ -62,8 +62,28 @@ describe('room expiry (T-28)', () => {
     alice.disconnect();
   });
 
-  it('a fresh join after expiry starts a brand-new room, ignoring the old resume token', async () => {
+  it('a plain join to a code whose room just expired is rejected ROOM_NOT_FOUND', async () => {
     const room = await spawnRoom({ code: 'HD9AAD' });
+    const alice = await room.connect({ username: 'alice' });
+    await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 1);
+
+    await room.setRoomExpiryMs(0);
+    await room.advanceTo();
+    expect((await room.debugState()).room).toBeNull();
+
+    alice.disconnect();
+
+    // T-30: an expired room reads exactly like a code nobody ever created —
+    // no `create` flag, no room, no silent resurrection.
+    const bob = await room.connect({ username: 'bob' });
+    await bob.expect('error', (m) => m.code === 'ROOM_NOT_FOUND');
+    expect((await room.debugState()).room).toBeNull();
+
+    bob.disconnect();
+  });
+
+  it('a `create` join after expiry starts a brand-new room, ignoring the old resume token', async () => {
+    const room = await spawnRoom({ code: 'HD9AAZ' });
     const alice = await room.connect({ username: 'alice' });
     // `resumeToken` only rides along on the `state` broadcast to the socket
     // that just (re)joined (§9) — capture it from alice's own 1-seat state,
@@ -84,8 +104,9 @@ describe('room expiry (T-28)', () => {
 
     // The stale token no longer resolves to anything (the room that issued
     // it is gone) — `handleJoin` falls through to a fresh join, exactly as
-    // if this were a brand-new room for this code.
-    const bob = await room.connect({ username: 'bob', resumeToken: staleResumeToken });
+    // if this were a brand-new room for this code. Explicit `create: true`,
+    // same as a client's own "Create Room" would send for an unknown code.
+    const bob = await room.connect({ username: 'bob', resumeToken: staleResumeToken, create: true });
     const state = await bob.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 1);
     expect((state.seats as Array<{ username: string }>)[0]?.username).toBe('bob');
 

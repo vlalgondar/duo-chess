@@ -85,3 +85,37 @@ describe('rooms in the Durable Object (T-09)', () => {
     carol.disconnect();
   });
 });
+
+describe('create vs. join (T-30)', () => {
+  it('a plain join to a code with no live room is rejected ROOM_NOT_FOUND, and creates nothing', async () => {
+    const room = await spawnRoom({ code: 'RM9AAD' });
+    const alice = await room.connect({ username: 'alice', create: false });
+    await alice.expect('error', (m) => m.code === 'ROOM_NOT_FOUND');
+    expect((await room.debugState()).room).toBeNull();
+    alice.disconnect();
+  });
+
+  it('a join with create: true against an unknown code stands up a fresh room, joiner as host', async () => {
+    const room = await spawnRoom({ code: 'RM9AAE' });
+    const alice = await room.connect({ username: 'alice', create: true });
+    const state = await alice.expect('state', (m) => usernames(m).length === 1);
+    expect((state.seats as Array<{ username: string; isHost: boolean }>)[0]).toMatchObject({
+      username: 'alice',
+      isHost: true,
+    });
+    alice.disconnect();
+  });
+
+  it('create: true against a code that already has a live room is rejected ROOM_CODE_TAKEN, room unchanged', async () => {
+    const room = await spawnRoom({ code: 'RM9AAF' });
+    const alice = await room.connect({ username: 'alice', create: true });
+    await alice.expect('state', (m) => usernames(m).length === 1);
+
+    const bob = await room.connect({ username: 'bob', create: true });
+    await bob.expect('error', (m) => m.code === 'ROOM_CODE_TAKEN');
+
+    expect((await room.debugState()).room?.seats.map((s) => s.username)).toEqual(['alice']);
+    alice.disconnect();
+    bob.disconnect();
+  });
+});

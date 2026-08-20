@@ -115,7 +115,7 @@ export function Home({ onCreate, onJoin, joinError, busy }: HomeProps) {
       </form>
 
       {joinError && (
-        <p data-testid="join-error" className="text-sm text-red-400">
+        <p data-testid="join-error" className="w-64 text-center text-sm text-red-400">
           {joinError}
         </p>
       )}

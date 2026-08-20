@@ -9,6 +9,7 @@ import {
   abandonmentDeadline,
   advanceToTeamSelect,
   annotationColorFor,
+  backToLobby,
   canStartGame,
   connectedTeamSize,
   createRoom,
@@ -457,6 +458,48 @@ describe('advanceToTeamSelect', () => {
     const teamSelect = advanceToTeamSelect(roomWithSeats(2), 'seat-0');
     if (!teamSelect.ok) throw new Error('setup expected success');
     expect(advanceToTeamSelect(teamSelect.value, 'seat-0')).toEqual({ ok: false, code: 'INVALID_PHASE' });
+  });
+});
+
+describe('backToLobby', () => {
+  /** A TEAM_SELECT room with every seat assigned a team and marked ready. */
+  function readyTeamSelectRoom(teams: (Team | null)[]): Room {
+    let room = roomWithSeats(teams.length);
+    const advanced = advanceToTeamSelect(room, 'seat-0');
+    if (!advanced.ok) throw new Error('setup expected success');
+    room = advanced.value;
+
+    teams.forEach((team, i) => {
+      if (team === null) return;
+      const result = setTeam(room, `seat-${i}`, team, NOW);
+      if (!result.ok) throw new Error('setup expected success');
+      room = result.value;
+    });
+    return { ...room, seats: room.seats.map((s) => ({ ...s, ready: true })) };
+  }
+
+  it('moves a TEAM_SELECT room back to LOBBY, clearing every team pick and ready flag', () => {
+    const room = readyTeamSelectRoom(['WHITE', 'BLACK']);
+    const result = backToLobby(room, 'seat-0');
+    if (!result.ok) throw new Error('expected success');
+
+    expect(result.value.phase).toBe('LOBBY');
+    expect(result.value.seats.every((s) => s.team === null)).toBe(true);
+    expect(result.value.seats.every((s) => !s.ready)).toBe(true);
+  });
+
+  it('rejects a non-host actor', () => {
+    const room = readyTeamSelectRoom(['WHITE', 'BLACK']);
+    expect(backToLobby(room, 'seat-1')).toEqual({ ok: false, code: 'NOT_HOST' });
+  });
+
+  it('rejects an unknown seat', () => {
+    const room = readyTeamSelectRoom(['WHITE', 'BLACK']);
+    expect(backToLobby(room, 'nope')).toEqual({ ok: false, code: 'SEAT_NOT_FOUND' });
+  });
+
+  it('rejects outside the TEAM_SELECT phase', () => {
+    expect(backToLobby(roomWithSeats(2), 'seat-0')).toEqual({ ok: false, code: 'INVALID_PHASE' });
   });
 });
 

@@ -67,6 +67,10 @@ export const joinMessageSchema = withNonce({
   code: roomCodeSchema,
   username: usernameSchema,
   resumeToken: z.string().min(1).optional(),
+  // T-30: explicit create intent. Without it (or a `resumeToken`), a `join`
+  // against a code with no live room is rejected `ROOM_NOT_FOUND` rather than
+  // silently standing up a fresh room — see `RoomDO.handleJoin`.
+  create: z.boolean().optional(),
 });
 
 /**
@@ -113,6 +117,11 @@ export const startGameMessageSchema = withNonce({
 /** Host-only "Randomize teams" (§5.4) — no payload, `RoomDO` reseats every player. */
 export const randomizeTeamsMessageSchema = withNonce({
   t: z.literal('randomize_teams'),
+});
+
+/** Host-only `TEAM_SELECT` -> `LOBBY` — the reverse of `start_game`'s LOBBY -> TEAM_SELECT leg. */
+export const backToLobbyMessageSchema = withNonce({
+  t: z.literal('back_to_lobby'),
 });
 
 export const proposeMessageSchema = withNonce({
@@ -207,6 +216,7 @@ export const clientMessageSchema = z.discriminatedUnion('t', [
   updateSettingsMessageSchema,
   startGameMessageSchema,
   randomizeTeamsMessageSchema,
+  backToLobbyMessageSchema,
   proposeMessageSchema,
   withdrawMessageSchema,
   acceptMessageSchema,
@@ -398,6 +408,8 @@ export const errorCodeSchema: z.ZodType<ErrorCode> = z.enum([
   'TEAM_CHAT_UNAVAILABLE',
   'VOTE_NOT_SUPPORTED',
   'NO_DRAW_OFFER',
+  'ROOM_NOT_FOUND',
+  'ROOM_CODE_TAKEN',
 ]);
 
 export const errorMessageSchema = z.object({

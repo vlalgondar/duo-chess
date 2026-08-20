@@ -127,10 +127,12 @@ describe('leave (§5.7)', () => {
 
     const before = await room.debugState();
     bob.send({ t: 'leave' });
-    await alice.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 1);
-
-    const after = await room.debugState();
-    expect(after.resumeTokenCount).toBe(before.resumeTokenCount - 1);
+    // Not `alice.expect('state', seats.length === 1)` as the barrier here: alice's own
+    // very first join broadcast (before bob even connected) already satisfies that
+    // predicate and sits in her buffered `received` messages, so `expect()` can resolve
+    // on it immediately — a pre-existing race, harmless when nothing else raced it, but
+    // real, so poll `debugState()` directly for the exact thing this test asserts.
+    await expect.poll(async () => (await room.debugState()).resumeTokenCount).toBe(before.resumeTokenCount - 1);
 
     alice.disconnect();
   });
@@ -150,7 +152,10 @@ describe('leave (§5.7)', () => {
     // test (`hardening.test.ts`) makes the same call, checking only `room`.
     await expect.poll(async () => (await room.debugState()).room, { timeout: 1000 }).toBeNull();
 
-    const fresh = await room.connect({ username: 'dave' });
+    // T-30: the room the DO knew about is gone (`debugState().room` above), so this
+    // join needs its own explicit create intent — the same as any other join to a
+    // code with no live room.
+    const fresh = await room.connect({ username: 'dave', create: true });
     const state = await fresh.expect('state', (m) => Array.isArray(m.seats) && m.seats.length === 1);
     expect(state.seats).toEqual([expect.objectContaining({ username: 'dave', isHost: true })]);
 

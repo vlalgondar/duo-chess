@@ -193,6 +193,12 @@ export interface ClientRoomView {
  * rather than silently gathering agreement and then doing nothing.
  * `NO_DRAW_OFFER` is `DRAW_ACCEPT` sent with no live opposing-team offer to
  * accept (including a team trying to accept its own offer).
+ * `ROOM_NOT_FOUND` (T-30) is a `join` with no `create` flag against a code
+ * with no live room — a typo, or a code whose room already expired
+ * (`RoomDO.expireRoom` wipes storage, so the two are indistinguishable by
+ * design). `ROOM_CODE_TAKEN` is the inverse: `join` with `create: true`
+ * against a code that already has a live room, e.g. a client-generated code
+ * collision — per §6, the client retries with a fresh code on this rejection.
  */
 export type ErrorCode =
   | 'ILLEGAL_MOVE'
@@ -215,4 +221,6 @@ export type ErrorCode =
   | 'CANNOT_SELF_REJECT'
   | 'TEAM_CHAT_UNAVAILABLE'
   | 'VOTE_NOT_SUPPORTED'
-  | 'NO_DRAW_OFFER';
+  | 'NO_DRAW_OFFER'
+  | 'ROOM_NOT_FOUND'
+  | 'ROOM_CODE_TAKEN';
