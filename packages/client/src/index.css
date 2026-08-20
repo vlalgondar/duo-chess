@@ -1,13 +1,102 @@
 @import 'tailwindcss';
 
+@theme {
+  --color-bg: #0b1220; /* page */
+  --color-surface: #151e2e; /* panel, card */
+  --color-surface-2: #1e293b; /* input, nested card, inactive pill */
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-line-strong: rgba(255, 255, 255, 0.16);
+
+  --color-primary: #15803d; /* felt green — Create/Start/Accept */
+  --color-primary-hi: #1a9a4b;
+  --color-accent: #d9a441; /* warm gold — clocks, proposals, focus ring */
+  --color-danger: #dc2626;
+  --color-danger-hi: #ef4444;
+  --color-warning: #d97706;
+
+  --color-text: #f1f5f9;
+  --color-text-muted: #94a3b8; /* ~7.5:1 on --color-bg */
+  --color-text-dim: #78899e; /* ~5.2:1 — don't use slate-500, it fails 4.5:1 on this bg */
+
+  --color-board-light: #ebe3d2; /* ivory */
+  --color-board-dark: #4e7a55; /* tournament green */
+
+  --font-display: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+  }
+
+  /* The app had zero focus styles before this pass — every interactive element needs one. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}
+
 /* §5.4: "Attempting to join a full team is refused with a small shake animation." */
 @keyframes team-select-shake {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(2px); }
-  30%, 50%, 70% { transform: translateX(-4px); }
-  40%, 60% { transform: translateX(4px); }
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-4px);
+  }
+  40%,
+  60% {
+    transform: translateX(4px);
+  }
 }
 
 .shake {
   animation: team-select-shake 0.4s ease-in-out;
+}
+
+/* §5.5: "a brief highlight pulse so the change is visible rather than mysterious" — applied to
+   the proposal card when its `proposalId` changes (see `TeamPanel`). */
+@keyframes proposal-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(217, 164, 65, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(217, 164, 65, 0);
+  }
+}
+
+.proposal-pulse {
+  animation: proposal-pulse 0.6s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shake,
+  .proposal-pulse {
+    animation: none;
+  }
+
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

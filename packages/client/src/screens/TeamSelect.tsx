@@ -1,6 +1,10 @@
+import type { ReactNode } from 'react';
 import { canStartGame, MAX_TEAM_SIZE, type ClientRoomView, type PublicSeat, type Team } from '@duo/shared';
 import { Spectators } from '../components/Spectators.js';
-import { LeaveButton } from './Lobby.js';
+import { Button } from '../ui/Button.js';
+import { StatusDot } from '../ui/StatusDot.js';
+import { LeaveButton } from '../ui/LeaveButton.js';
+import { ArrowLeft, ArrowRight, Check, Crown, Shuffle, Users } from '../ui/Icon.js';
 
 /** Mirrors `RoomState['lastError']` (store.ts) — an in-session rejection, not a failed join. */
 type LastError = { code: string; at: number } | null;
@@ -19,6 +23,10 @@ interface TeamSelectProps {
 
 /** Left-to-right strip order (§5.4): Team 1 (white) — Unassigned — Team 2 (black). */
 const STRIP_ORDER: ReadonlyArray<Team | null> = ['WHITE', null, 'BLACK'];
+
+// Matches `GameScreen.tsx`'s `TEAM_ACCENT` — the same colors the proposal arrow/ghost use
+// in-game, so a player's team association reads consistently from team select onward.
+const TEAM_ACCENT: Record<'WHITE' | 'BLACK', string> = { WHITE: '#38bdf8', BLACK: '#c084fc' };
 
 function neighbor(team: Team | null, direction: -1 | 1): Team | null | undefined {
   const index = STRIP_ORDER.indexOf(team);
@@ -54,16 +62,15 @@ export function TeamSelect({
     view.seats.length > 0 && view.seats.every((s) => s.ready) && view.seats.every((s) => s.team !== null) && canStartGame(view.seats);
 
   return (
-    <main
-      data-testid="team-select-shell"
-      className="flex min-h-dvh flex-col items-center gap-6 bg-slate-950 p-6 text-slate-100"
-    >
-      <h1 className="text-2xl font-semibold">Team Select</h1>
+    <main data-testid="team-select-shell" className="flex min-h-dvh flex-col items-center gap-6 p-6">
+      <h1 className="font-display text-2xl font-bold text-text">Team Select</h1>
 
       <div className="flex w-full max-w-4xl flex-col gap-4 sm:flex-row sm:items-start sm:justify-center">
         <TeamColumn
           testId="team-panel-white"
           title="Team 1 — White"
+          icon={<Crown className="h-4 w-4" style={{ color: TEAM_ACCENT.WHITE }} aria-hidden="true" />}
+          accentColor={TEAM_ACCENT.WHITE}
           team="WHITE"
           seats={whiteSeats}
           you={you}
@@ -74,6 +81,7 @@ export function TeamSelect({
         <TeamColumn
           testId="unassigned-strip"
           title="Unassigned"
+          icon={<Users className="h-4 w-4 text-text-dim" aria-hidden="true" />}
           team={null}
           seats={unassignedSeats}
           you={you}
@@ -84,6 +92,8 @@ export function TeamSelect({
         <TeamColumn
           testId="team-panel-black"
           title="Team 2 — Black"
+          icon={<Crown className="h-4 w-4" style={{ color: TEAM_ACCENT.BLACK }} aria-hidden="true" />}
+          accentColor={TEAM_ACCENT.BLACK}
           team="BLACK"
           seats={blackSeats}
           you={you}
@@ -100,42 +110,35 @@ export function TeamSelect({
       />
 
       {isHost && (
-        <button
-          type="button"
-          data-testid="randomize-button"
-          onClick={onRandomize}
-          className="text-sm text-emerald-400 underline"
-        >
+        <Button type="button" data-testid="randomize-button" variant="link" onClick={onRandomize}>
+          <Shuffle className="h-4 w-4" aria-hidden="true" />
           Randomize teams
-        </button>
+        </Button>
       )}
 
       {/* Host-only, the reverse of Lobby's own Start button — gets back to Lobby-only
           settings (time control, spectators, disconnect grace) without abandoning the
           room. Clears every team pick and ready flag (roomEngine.backToLobby). */}
       {isHost && (
-        <button
-          type="button"
-          data-testid="back-to-lobby-button"
-          onClick={onBackToLobby}
-          className="flex h-11 w-64 items-center justify-center rounded bg-slate-700 text-sm font-semibold text-slate-300"
-        >
+        <Button type="button" data-testid="back-to-lobby-button" variant="secondary" onClick={onBackToLobby} className="w-64">
           Back to Lobby
-        </button>
+        </Button>
       )}
 
       {isHost ? (
-        <button
+        <Button
           type="button"
           data-testid="start-game-button"
+          variant="primary"
+          size="lg"
           disabled={!canStart}
           onClick={onStart}
-          className="w-64 rounded bg-emerald-600 px-4 py-3 text-lg font-semibold disabled:opacity-50"
+          className="w-64"
         >
           Start Game
-        </button>
+        </Button>
       ) : (
-        <p className="text-sm text-slate-400">Waiting for the host to start…</p>
+        <p className="text-sm text-text-muted">Waiting for the host to start…</p>
       )}
 
       <LeaveButton onLeave={onLeave} />
@@ -146,6 +149,8 @@ export function TeamSelect({
 interface TeamColumnProps {
   testId: string;
   title: string;
+  icon: ReactNode;
+  accentColor?: string;
   team: Team | null;
   seats: PublicSeat[];
   you: PublicSeat | undefined;
@@ -154,7 +159,7 @@ interface TeamColumnProps {
   onSetReady: (ready: boolean) => void;
 }
 
-function TeamColumn({ testId, title, team, seats, you, lastError, onSetTeam, onSetReady }: TeamColumnProps) {
+function TeamColumn({ testId, title, icon, accentColor, seats, you, lastError, team, onSetTeam, onSetReady }: TeamColumnProps) {
   return (
     <section
       data-testid={testId}
@@ -163,11 +168,17 @@ function TeamColumn({ testId, title, team, seats, you, lastError, onSetTeam, onS
         event.preventDefault();
         onSetTeam(team);
       }}
-      className="flex min-h-[160px] flex-1 flex-col gap-2 rounded bg-slate-900 p-3"
+      className={`flex min-h-[160px] flex-1 flex-col gap-2 rounded-xl border p-3 ${
+        accentColor ? 'border-line bg-surface' : 'border-dashed border-line bg-transparent'
+      }`}
+      style={accentColor ? { borderTopColor: accentColor, borderTopWidth: '3px' } : undefined}
     >
-      <h2 className="flex items-center justify-between text-sm font-semibold text-slate-300">
-        <span>{title}</span>
-        <span className="text-xs text-slate-500">
+      <h2 className="flex items-center justify-between text-sm font-semibold text-text-muted">
+        <span className="flex items-center gap-1.5">
+          {icon}
+          {title}
+        </span>
+        <span className="text-xs text-text-dim">
           {seats.length}/{team ? MAX_TEAM_SIZE : seats.length}
         </span>
       </h2>
@@ -218,19 +229,20 @@ function Card({ seat, isYou, lastError, onSetTeam, onSetReady }: CardProps) {
       onDragStart={(event) => {
         event.dataTransfer.setData('text/plain', seat.publicId);
       }}
-      className={`flex items-center justify-between gap-2 rounded bg-slate-800 px-3 py-2 text-sm ${shaking ? 'shake' : ''}`}
+      className={`flex items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm ${
+        isYou ? 'ring-1 ring-accent/40' : ''
+      } ${shaking ? 'shake' : ''}`}
     >
-      <span className="flex items-center gap-1">
-        <span
-          data-testid="connection-dot"
-          data-connected={seat.connected}
-          className={`h-2.5 w-2.5 rounded-full ${seat.connected ? 'bg-emerald-500' : 'bg-slate-600'}`}
-        />
-        {seat.username}
-        {seat.isHost && <span className="text-xs text-slate-400">(host)</span>}
+      <span className="flex items-center gap-1.5">
+        <StatusDot connected={seat.connected} />
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-line-strong text-[11px] font-semibold uppercase text-text-muted">
+          {seat.username.slice(0, 1)}
+        </span>
+        <span className="text-text">{seat.username}</span>
+        {seat.isHost && <span className="text-xs text-text-dim">(host)</span>}
         {seat.ready && (
-          <span data-testid="ready-check" className="text-emerald-400">
-            ✓
+          <span data-testid="ready-check" className="text-primary">
+            <Check className="h-4 w-4" aria-hidden="true" />
           </span>
         )}
       </span>
@@ -240,11 +252,12 @@ function Card({ seat, isYou, lastError, onSetTeam, onSetReady }: CardProps) {
           <button
             type="button"
             data-testid="move-left"
+            aria-label="Move to the previous team"
             disabled={left === undefined}
             onClick={() => onSetTeam(left ?? null)}
-            className="flex h-11 min-w-[44px] items-center justify-center rounded bg-slate-700 disabled:opacity-30"
+            className="flex h-11 min-w-[44px] items-center justify-center rounded-lg bg-surface text-text-muted transition-colors hover:bg-line-strong disabled:opacity-30"
           >
-            ←
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           </button>
           {/* §5.4: Ready has nothing to confirm without a side chosen — `setTeam` (roomEngine.ts)
               also clears `ready` server-side on unassign, so this never hides a stale checkmark. */}
@@ -253,7 +266,7 @@ function Card({ seat, isYou, lastError, onSetTeam, onSetReady }: CardProps) {
               type="button"
               data-testid="ready-toggle"
               onClick={() => onSetReady(!seat.ready)}
-              className="flex h-11 min-w-[44px] items-center justify-center rounded bg-emerald-700 px-2 text-xs font-semibold disabled:opacity-30"
+              className="flex h-11 min-w-[44px] items-center justify-center rounded-lg bg-primary px-2 text-xs font-semibold text-white transition-colors hover:bg-primary-hi disabled:opacity-30"
             >
               {seat.ready ? 'Unready' : 'Ready'}
             </button>
@@ -261,11 +274,12 @@ function Card({ seat, isYou, lastError, onSetTeam, onSetReady }: CardProps) {
           <button
             type="button"
             data-testid="move-right"
+            aria-label="Move to the next team"
             disabled={right === undefined}
             onClick={() => onSetTeam(right ?? null)}
-            className="flex h-11 min-w-[44px] items-center justify-center rounded bg-slate-700 disabled:opacity-30"
+            className="flex h-11 min-w-[44px] items-center justify-center rounded-lg bg-surface text-text-muted transition-colors hover:bg-line-strong disabled:opacity-30"
           >
-            →
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       )}

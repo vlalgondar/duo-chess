@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Chess } from 'chess.js';
 import { GAME_OVER_REASON, type ClientRoomView } from '@duo/shared';
 import { Board } from '../components/Board.js';
-import { LeaveButton } from './Lobby.js';
+import { LeaveButton } from '../ui/LeaveButton.js';
+import { Button } from '../ui/Button.js';
+import { Check, Copy } from '../ui/Icon.js';
 
 interface ResultScreenProps {
   view: ClientRoomView;
@@ -22,7 +24,7 @@ export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
 
   if (!game) {
     return (
-      <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-slate-950 text-slate-100">
+      <main className="flex min-h-dvh flex-col items-center justify-center gap-6">
         <p data-testid="result-banner">Game over</p>
         <LeaveButton onLeave={onLeave} />
       </main>
@@ -32,10 +34,21 @@ export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
   const orientation = you?.team === 'BLACK' ? 'black' : 'white';
   const reason = GAME_OVER_REASON[game.status];
   const outcome = game.winner ? `${game.winner} wins` : 'Draw';
+  const youTeam = you?.team ?? null;
+  const youWon = youTeam !== null && game.winner === youTeam;
+  const youLost = youTeam !== null && game.winner !== null && game.winner !== youTeam;
+  const bannerClass = youWon
+    ? 'border-primary/50 bg-primary/10 text-primary'
+    : youLost
+      ? 'border-danger/50 bg-danger/10 text-danger-hi'
+      : 'border-line bg-surface text-text';
 
   return (
-    <main className="flex min-h-dvh flex-col items-center gap-6 bg-slate-950 p-6 text-slate-100">
-      <h1 data-testid="result-banner" className="text-2xl font-semibold">
+    <main className="flex min-h-dvh flex-col items-center gap-6 p-6">
+      <h1
+        data-testid="result-banner"
+        className={`rounded-xl border px-6 py-3 text-center font-display text-2xl font-bold ${bannerClass}`}
+      >
         {outcome} — {reason}
       </h1>
 
@@ -46,14 +59,9 @@ export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
       <PgnCopyButton moveHistory={game.moveHistory} />
 
       {you && (
-        <button
-          data-testid="rematch-button"
-          type="button"
-          onClick={onRematch}
-          className="w-64 rounded bg-emerald-600 px-4 py-3 text-lg font-semibold"
-        >
+        <Button data-testid="rematch-button" variant="primary" size="lg" onClick={onRematch} className="w-64">
           Rematch
-        </button>
+        </Button>
       )}
 
       <LeaveButton onLeave={onLeave} />
@@ -68,12 +76,12 @@ function MoveList({ moveHistory }: { moveHistory: readonly string[] }) {
   }
 
   return (
-    <ol data-testid="move-list" className="flex w-64 flex-col gap-1 rounded bg-slate-900 p-3 text-sm">
+    <ol data-testid="move-list" className="flex w-full max-w-sm flex-col gap-1 rounded-xl border border-line bg-surface p-3 font-mono text-sm">
       {rows.map((row) => (
         <li key={row.number} data-testid="move-row" className="flex gap-2">
-          <span className="w-6 text-slate-500">{row.number}.</span>
-          <span className="w-16">{row.white}</span>
-          <span className="w-16">{row.black ?? ''}</span>
+          <span className="w-6 text-text-dim">{row.number}.</span>
+          <span className="w-16 text-text">{row.white}</span>
+          <span className="w-16 text-text">{row.black ?? ''}</span>
         </li>
       ))}
     </ol>
@@ -99,8 +107,9 @@ function PgnCopyButton({ moveHistory }: { moveHistory: readonly string[] }) {
   };
 
   return (
-    <button data-testid="pgn-copy-button" type="button" onClick={handleCopy} className="text-sm text-emerald-400 underline">
+    <Button data-testid="pgn-copy-button" variant="link" onClick={handleCopy}>
+      {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
       {copied ? 'Copied!' : 'Copy PGN'}
-    </button>
+    </Button>
   );
 }

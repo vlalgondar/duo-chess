@@ -1,4 +1,6 @@
 import type { GameStatus, Team, TeamVoteKind, WireTeamVote } from '@duo/shared';
+import { Button } from '../ui/Button.js';
+import { Flag } from '../ui/Icon.js';
 
 interface VoteActionsProps {
   yourTeam: Team | null;
@@ -17,8 +19,6 @@ const VOTE_LABEL: Record<TeamVoteKind, string> = {
   DRAW_ACCEPT: 'accept the draw',
   TAKEBACK: 'request a takeback',
 };
-
-const BUTTON_BASE = 'flex h-11 min-w-[44px] items-center justify-center rounded px-3 text-sm font-semibold text-slate-100';
 
 /**
  * §4.5/§7 "Team-level decisions": resign, offer a draw, and accept the opponents' offer, all the
@@ -39,22 +39,17 @@ export function VoteActions({ yourTeam, you, gameStatus, pendingVotes, drawOffer
     const label = VOTE_LABEL[ownVote.kind];
     if (ownVote.agreedSeats.includes(you)) {
       return (
-        <p data-testid="vote-status" className="text-sm text-slate-400">
+        <p data-testid="vote-status" className="text-sm text-text-muted">
           Waiting for your teammate to agree to {label}…
         </p>
       );
     }
     return (
-      <div data-testid="vote-status" className="flex items-center gap-2 text-sm text-slate-200">
+      <div data-testid="vote-status" className="flex items-center gap-2 text-sm text-text">
         <span>Your teammate wants to {label}.</span>
-        <button
-          type="button"
-          data-testid="agree-vote-button"
-          onClick={() => onVote(ownVote.kind)}
-          className={`${BUTTON_BASE} bg-emerald-700`}
-        >
+        <Button type="button" data-testid="agree-vote-button" variant="primary" onClick={() => onVote(ownVote.kind)}>
           Agree
-        </button>
+        </Button>
       </div>
     );
   }
@@ -66,29 +61,20 @@ export function VoteActions({ yourTeam, you, gameStatus, pendingVotes, drawOffer
   return (
     <div className="flex flex-wrap items-center gap-2">
       {incomingOffer && (
-        <div data-testid="draw-offer-banner" className="flex items-center gap-2 text-sm text-slate-200">
+        <div data-testid="draw-offer-banner" className="flex items-center gap-2 text-sm text-text">
           <span>The other team offers a draw.</span>
-          <button
-            type="button"
-            data-testid="accept-draw-button"
-            onClick={() => onVote('DRAW_ACCEPT')}
-            className={`${BUTTON_BASE} bg-emerald-700`}
-          >
+          <Button type="button" data-testid="accept-draw-button" variant="primary" onClick={() => onVote('DRAW_ACCEPT')}>
             Accept Draw
-          </button>
+          </Button>
         </div>
       )}
-      <button type="button" data-testid="resign-button" onClick={handleResign} className={`${BUTTON_BASE} bg-red-800`}>
+      <Button type="button" data-testid="resign-button" variant="danger" onClick={handleResign}>
+        <Flag className="h-4 w-4" aria-hidden="true" />
         Resign
-      </button>
-      <button
-        type="button"
-        data-testid="offer-draw-button"
-        onClick={() => onVote('DRAW_OFFER')}
-        className={`${BUTTON_BASE} bg-slate-700`}
-      >
+      </Button>
+      <Button type="button" data-testid="offer-draw-button" variant="secondary" onClick={() => onVote('DRAW_OFFER')}>
         Offer Draw
-      </button>
+      </Button>
     </div>
   );
 }

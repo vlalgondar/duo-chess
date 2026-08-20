@@ -11,13 +11,25 @@ import type { AnnotationColor, WireAnnotation } from '@duo/shared';
 type PromotionPiece = 'q' | 'r' | 'b' | 'n';
 const PROMOTION_PIECES: readonly PromotionPiece[] = ['q', 'r', 'b', 'n'];
 const PROMOTION_LABELS: Record<PromotionPiece, string> = { q: 'Q', r: 'R', b: 'B', n: 'N' };
+const PROMOTION_NAMES: Record<PromotionPiece, string> = {
+  q: 'Queen',
+  r: 'Rook',
+  b: 'Bishop',
+  n: 'Knight',
+};
 
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-const SELECTED_STYLE: CSSProperties = { backgroundColor: 'rgba(45, 212, 191, 0.4)' };
-const LAST_MOVE_STYLE: CSSProperties = { backgroundColor: 'rgba(250, 204, 21, 0.35)' };
-const CHECK_STYLE: CSSProperties = { boxShadow: 'inset 0 0 1.4em 0.5em rgba(220, 38, 38, 0.85)' };
+// Tuned against the tournament green/ivory squares below (`customDarkSquareStyle`/
+// `customLightSquareStyle`) — the previous teal/yellow pair went muddy over green, so
+// selected is now the app's gold accent and last-move a distinct sky tint (§5.5: "a
+// persistent tint in a second color").
+const SELECTED_STYLE: CSSProperties = { backgroundColor: 'rgba(217, 164, 65, 0.45)' };
+const LAST_MOVE_STYLE: CSSProperties = { backgroundColor: 'rgba(56, 189, 248, 0.35)' };
+const CHECK_STYLE: CSSProperties = { boxShadow: 'inset 0 0 1.6em 0.55em rgba(220, 38, 38, 0.9)' };
 
+// Navy (the app's own page-background hue) at a higher alpha than the old black/0.28 —
+// black read too faint against the darker of the two new squares.
 const DOT_STYLE: CSSProperties = {
   position: 'absolute',
   top: '50%',
@@ -26,7 +38,7 @@ const DOT_STYLE: CSSProperties = {
   height: '28%',
   transform: 'translate(-50%, -50%)',
   borderRadius: '50%',
-  backgroundColor: 'rgba(0, 0, 0, 0.28)',
+  backgroundColor: 'rgba(11, 18, 32, 0.45)',
   pointerEvents: 'none',
 };
 
@@ -34,7 +46,7 @@ const RING_STYLE: CSSProperties = {
   position: 'absolute',
   inset: '4%',
   borderRadius: '50%',
-  border: '0.35em solid rgba(0, 0, 0, 0.28)',
+  border: '0.35em solid rgba(11, 18, 32, 0.45)',
   boxSizing: 'border-box',
   pointerEvents: 'none',
 };
@@ -515,6 +527,12 @@ export function Board({
         onPromotionCheck={() => false}
         customSquare={SquareContent}
         customSquareStyles={customSquareStyles}
+        customDarkSquareStyle={{ backgroundColor: '#4E7A55' }}
+        customLightSquareStyle={{ backgroundColor: '#EBE3D2' }}
+        customBoardStyle={{
+          borderRadius: '0.75rem',
+          boxShadow: '0 0 0 1px rgba(217, 164, 65, 0.35), 0 12px 24px -8px rgba(0, 0, 0, 0.55)',
+        }}
         arePiecesDraggable={!locked}
         // The library's own right-click-drag arrow feature is superseded by our own overlay
         // below (per-annotation colors, plus circles, which it has no concept of) — disabled so
@@ -606,16 +624,22 @@ export function Board({
       {pendingPromotion && (
         <div
           data-testid="promotion-picker"
-          className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70"
+          className="absolute inset-0 z-20 flex items-center justify-center bg-bg/80 backdrop-blur-sm"
         >
-          <div className="flex items-center gap-2 rounded bg-slate-900 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose promotion piece"
+            className="flex items-center gap-2 rounded-xl border border-line bg-surface p-4 shadow-xl"
+          >
             {PROMOTION_PIECES.map((piece) => (
               <button
                 key={piece}
                 type="button"
                 data-testid={`promote-${piece}`}
+                aria-label={`Promote to ${PROMOTION_NAMES[piece]}`}
                 onClick={() => commitMove(pendingPromotion.from, pendingPromotion.to, piece)}
-                className="flex h-14 w-14 items-center justify-center rounded bg-slate-800 text-2xl font-bold text-slate-100 hover:bg-slate-700"
+                className="flex h-14 w-14 items-center justify-center rounded-lg bg-surface-2 text-2xl font-bold text-text transition-colors hover:bg-line-strong"
               >
                 {PROMOTION_LABELS[piece]}
               </button>
@@ -624,7 +648,7 @@ export function Board({
               type="button"
               data-testid="promotion-cancel"
               onClick={() => setPendingPromotion(null)}
-              className="ml-2 rounded px-2 text-sm text-slate-400 underline"
+              className="ml-2 rounded px-2 text-sm text-accent underline underline-offset-2"
             >
               Cancel
             </button>

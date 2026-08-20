@@ -1,5 +1,8 @@
 import { useState } from 'react';
 import { MAX_SEATS, MAX_TEAM_SIZE, type PublicSeat, type PublicSpectator, type Team } from '@duo/shared';
+import { StatusDot } from '../ui/StatusDot.js';
+import { Button } from '../ui/Button.js';
+import { Eye } from '../ui/Icon.js';
 
 interface SpectatorsProps {
   spectators: readonly PublicSpectator[];
@@ -27,46 +30,49 @@ export function Spectators({ spectators, onPromote, seats }: SpectatorsProps) {
   const teamCount = (team: Team) => seats.filter((s) => s.team === team).length;
 
   return (
-    <div data-testid="spectators" className="flex flex-col items-center gap-1 text-xs text-slate-400">
+    <div data-testid="spectators" className="flex flex-col items-center gap-1 text-xs text-text-dim">
       <button
         type="button"
         data-testid="spectator-count"
         onClick={() => setExpanded((current) => !current)}
-        className="underline decoration-dotted"
+        className="flex items-center gap-1 underline decoration-dotted underline-offset-2"
       >
-        {'\u{1F441}'} {spectators.length} spectator{spectators.length === 1 ? '' : 's'}
+        <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+        {spectators.length} spectator{spectators.length === 1 ? '' : 's'}
       </button>
 
       {expanded && (
-        <ul data-testid="spectator-roster" className="flex w-64 flex-col gap-1 rounded bg-slate-900 p-2">
+        <ul data-testid="spectator-roster" className="flex w-64 flex-col gap-1 rounded-lg border border-line bg-surface p-2">
           {spectators.map((spectator) => (
             <li key={spectator.publicId} data-testid="spectator-item" className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1">
-                <span
-                  className={`h-2 w-2 rounded-full ${spectator.connected ? 'bg-emerald-500' : 'bg-slate-600'}`}
-                />
+              <span className="flex items-center gap-1.5">
+                <StatusDot connected={spectator.connected} />
                 {spectator.username}
               </span>
               {onPromote && (
                 <span className="flex gap-1">
-                  <button
+                  <Button
                     type="button"
                     data-testid="promote-white"
+                    variant="secondary"
+                    size="md"
                     disabled={seatsFull || teamCount('WHITE') >= MAX_TEAM_SIZE}
                     onClick={() => onPromote(spectator.publicId, 'WHITE')}
-                    className="flex h-11 min-w-[44px] items-center justify-center rounded bg-slate-700 px-2 text-xs disabled:opacity-30"
+                    className="px-2 text-xs"
                   >
                     → White
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
                     data-testid="promote-black"
+                    variant="secondary"
+                    size="md"
                     disabled={seatsFull || teamCount('BLACK') >= MAX_TEAM_SIZE}
                     onClick={() => onPromote(spectator.publicId, 'BLACK')}
-                    className="flex h-11 min-w-[44px] items-center justify-center rounded bg-slate-700 px-2 text-xs disabled:opacity-30"
+                    className="px-2 text-xs"
                   >
                     → Black
-                  </button>
+                  </Button>
                 </span>
               )}
             </li>

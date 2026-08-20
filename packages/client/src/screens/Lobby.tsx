@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { TIME_CONTROLS, type ClientRoomView, type RoomSettings, type Team } from '@duo/shared';
 import { Spectators } from '../components/Spectators.js';
+import { Button } from '../ui/Button.js';
+import { Panel } from '../ui/Panel.js';
+import { StatusDot } from '../ui/StatusDot.js';
+import { LeaveButton } from '../ui/LeaveButton.js';
+import { Check, Copy } from '../ui/Icon.js';
 
 // docs/DESIGN.md §5.3 gates Start on "every player has picked a team", but
 // team assignment happens on the later Team Select screen (§5.4) per the
@@ -25,33 +30,31 @@ export function Lobby({ view, onStart, onUpdateSettings, onPromoteSpectator, onL
   const joinLink = `${window.location.origin}/join/${view.code}`;
 
   return (
-    <main className="flex min-h-dvh flex-col items-center gap-8 bg-slate-950 p-6 text-slate-100">
-      <h1 className="text-2xl font-semibold">Duo Chess</h1>
+    <main className="flex min-h-dvh flex-col items-center gap-6 p-6">
+      <h1 className="font-display text-2xl font-bold text-text">Duo Chess</h1>
 
       <section className="flex flex-col items-center gap-2">
         <p
           data-testid="room-code"
-          className="rounded bg-slate-800 px-4 py-2 font-mono text-2xl tracking-[0.3em]"
+          className="rounded-lg border border-line bg-surface px-5 py-2.5 font-mono text-2xl tracking-[0.3em] text-accent"
         >
           {view.code}
         </p>
         <CopyLinkButton link={joinLink} />
       </section>
 
-      <ul data-testid="roster" className="flex w-64 flex-col gap-2">
+      <ul data-testid="roster" className="flex w-full max-w-sm flex-col gap-2">
         {view.seats.map((seat) => (
           <li
             key={seat.publicId}
             data-testid="roster-item"
-            className="flex items-center gap-2 rounded bg-slate-900 px-3 py-2"
+            className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2.5"
           >
-            <span
-              data-testid="connection-dot"
-              data-connected={seat.connected}
-              className={`h-2.5 w-2.5 rounded-full ${seat.connected ? 'bg-emerald-500' : 'bg-slate-600'}`}
-            />
-            <span>{seat.username}</span>
-            {seat.isHost && <span className="text-xs text-slate-400">(host)</span>}
+            <StatusDot connected={seat.connected} />
+            <span className="text-text">{seat.username}</span>
+            {seat.isHost && (
+              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">(host)</span>
+            )}
           </li>
         ))}
       </ul>
@@ -65,43 +68,19 @@ export function Lobby({ view, onStart, onUpdateSettings, onPromoteSpectator, onL
       {isHost ? (
         <HostSettings settings={view.settings} onChange={onUpdateSettings} />
       ) : (
-        <p className="text-sm text-slate-400">Time control: {view.settings.timeControl.label}</p>
+        <p className="text-sm text-text-muted">Time control: {view.settings.timeControl.label}</p>
       )}
 
       {isHost ? (
-        <button
-          data-testid="start-button"
-          type="button"
-          disabled={!canStart}
-          onClick={onStart}
-          className="w-64 rounded bg-emerald-600 px-4 py-3 text-lg font-semibold disabled:opacity-50"
-        >
+        <Button data-testid="start-button" variant="primary" size="lg" disabled={!canStart} onClick={onStart} className="w-64">
           Start
-        </button>
+        </Button>
       ) : (
-        <p className="text-sm text-slate-400">Waiting for the host to start…</p>
+        <p className="text-sm text-text-muted">Waiting for the host to start…</p>
       )}
 
       <LeaveButton onLeave={onLeave} />
     </main>
-  );
-}
-
-/**
- * §5.7's `leave`: frees the seat entirely and returns to Home — distinct from a
- * disconnect (closing the tab), which keeps the seat reserved for §9 reconnection.
- * `h-11` is exactly 44px (CLAUDE.md rule 9's minimum tap target).
- */
-export function LeaveButton({ onLeave }: { onLeave: () => void }) {
-  return (
-    <button
-      data-testid="leave-button"
-      type="button"
-      onClick={onLeave}
-      className="flex h-11 w-64 items-center justify-center rounded bg-slate-700 text-sm font-semibold text-slate-300"
-    >
-      Leave room
-    </button>
   );
 }
 
@@ -120,14 +99,10 @@ function CopyLinkButton({ link }: { link: string }) {
   };
 
   return (
-    <button
-      data-testid="copy-link-button"
-      type="button"
-      onClick={handleCopy}
-      className="text-sm text-emerald-400 underline"
-    >
+    <Button data-testid="copy-link-button" variant="link" onClick={handleCopy}>
+      {copied ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
       {copied ? 'Copied!' : 'Copy invite link'}
-    </button>
+    </Button>
   );
 }
 
@@ -145,8 +120,8 @@ function HostSettings({
   onChange: (settings: RoomSettings) => void;
 }) {
   return (
-    <section data-testid="host-settings" className="flex w-64 flex-col gap-3 rounded bg-slate-900 p-4 text-sm">
-      <label className="flex items-center justify-between gap-2">
+    <Panel data-testid="host-settings" className="flex w-full max-w-sm flex-col gap-3 p-4 text-sm">
+      <label className="flex items-center justify-between gap-2 text-text-muted">
         Time control
         <select
           data-testid="time-control-select"
@@ -155,7 +130,7 @@ function HostSettings({
             const timeControl = TIME_CONTROLS.find((tc) => tc.label === event.target.value);
             if (timeControl) onChange({ ...settings, timeControl });
           }}
-          className="rounded bg-slate-800 px-2 py-1"
+          className="rounded-lg border border-line bg-surface-2 px-2 py-1.5 text-text"
         >
           {TIME_CONTROLS.map((tc) => (
             <option key={tc.label} value={tc.label}>
@@ -165,30 +140,32 @@ function HostSettings({
         </select>
       </label>
 
-      <label className="flex items-center justify-between gap-2">
+      <label className="flex items-center justify-between gap-2 text-text-muted">
         Allow spectators
         <input
           type="checkbox"
           checked={settings.allowSpectators}
           onChange={(event) => onChange({ ...settings, allowSpectators: event.target.checked })}
+          className="h-4 w-4 accent-primary"
         />
       </label>
 
-      <label className="flex items-center justify-between gap-2">
+      <label className="flex items-center justify-between gap-2 text-text-muted">
         Randomize colors
         <input
           type="checkbox"
           checked={settings.randomizeColors}
           onChange={(event) => onChange({ ...settings, randomizeColors: event.target.checked })}
+          className="h-4 w-4 accent-primary"
         />
       </label>
 
-      <label className="flex items-center justify-between gap-2">
+      <label className="flex items-center justify-between gap-2 text-text-muted">
         Disconnect grace
         <select
           value={settings.disconnectGraceMs}
           onChange={(event) => onChange({ ...settings, disconnectGraceMs: Number(event.target.value) })}
-          className="rounded bg-slate-800 px-2 py-1"
+          className="rounded-lg border border-line bg-surface-2 px-2 py-1.5 text-text"
         >
           <option value={30_000}>30s</option>
           <option value={60_000}>60s</option>
@@ -196,6 +173,6 @@ function HostSettings({
           <option value={120_000}>120s</option>
         </select>
       </label>
-    </section>
+    </Panel>
   );
 }

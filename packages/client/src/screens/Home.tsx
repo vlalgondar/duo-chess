@@ -1,5 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '@duo/shared';
+import { Button } from '../ui/Button.js';
+import { Field } from '../ui/Field.js';
+import { Panel } from '../ui/Panel.js';
+import { Crown } from '../ui/Icon.js';
 
 const USERNAME_STORAGE_KEY = 'duo-chess:username';
 const JOIN_PATH_PATTERN = /^\/join\/([^/]+)\/?$/i;
@@ -69,56 +73,73 @@ export function Home({ onCreate, onJoin, joinError, busy }: HomeProps) {
   };
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-slate-950 p-6 text-slate-100">
-      <h1 className="text-3xl font-semibold">Duo Chess</h1>
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 p-6">
+      <div className="flex flex-col items-center gap-1.5">
+        <div className="flex items-center gap-2 font-display text-2xl font-bold tracking-tight text-text">
+          <Crown className="h-7 w-7 text-accent" aria-hidden="true" />
+          Duo Chess
+        </div>
+        <p className="text-sm text-text-muted">2v2 online chess — propose, agree, move.</p>
+      </div>
 
-      <input
-        data-testid="username-input"
-        className="w-64 rounded bg-slate-800 px-3 py-2"
-        placeholder="Username"
-        value={username}
-        maxLength={USERNAME_MAX_LENGTH}
-        onChange={(event) => setUsername(event.target.value)}
-      />
-
-      <button
-        data-testid="create-room-button"
-        type="button"
-        disabled={!usernameValid || busy}
-        onClick={handleCreate}
-        className="w-64 rounded bg-emerald-600 px-4 py-3 text-lg font-semibold disabled:opacity-50"
-      >
-        Create Room
-      </button>
-
-      <form onSubmit={handleJoin} className="flex w-64 flex-col gap-3 border-t border-slate-800 pt-6">
-        <input
-          data-testid="code-input"
-          className="rounded bg-slate-800 px-3 py-2 text-center uppercase tracking-widest"
-          placeholder="Room code"
-          value={code}
-          onChange={(event) => setCode(sanitizeCode(event.target.value))}
-          onPaste={(event) => {
-            event.preventDefault();
-            setCode(sanitizeCode(event.clipboardData.getData('text')));
-          }}
-          maxLength={ROOM_CODE_LENGTH}
+      <Panel className="flex w-full max-w-sm flex-col gap-4 p-5">
+        <Field
+          data-testid="username-input"
+          label="Your name"
+          placeholder="e.g. alice"
+          value={username}
+          maxLength={USERNAME_MAX_LENGTH}
+          onChange={(event) => setUsername(event.target.value)}
         />
-        <button
-          data-testid="join-button"
-          type="submit"
-          disabled={!usernameValid || !codeValid || busy}
-          className="rounded bg-slate-700 px-3 py-2 font-medium disabled:opacity-50"
-        >
-          Join
-        </button>
-      </form>
 
-      {joinError && (
-        <p data-testid="join-error" className="w-64 text-center text-sm text-red-400">
-          {joinError}
-        </p>
-      )}
+        <Button
+          data-testid="create-room-button"
+          variant="primary"
+          size="lg"
+          disabled={!usernameValid || busy}
+          onClick={handleCreate}
+          className="w-full"
+        >
+          Create Room
+        </Button>
+
+        <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-text-dim">
+          <span className="h-px flex-1 bg-line" />
+          or join a room
+          <span className="h-px flex-1 bg-line" />
+        </div>
+
+        <form onSubmit={handleJoin} className="flex flex-col gap-3">
+          <Field
+            data-testid="code-input"
+            label="Room code"
+            placeholder="K7P2QX"
+            value={code}
+            onChange={(event) => setCode(sanitizeCode(event.target.value))}
+            onPaste={(event) => {
+              event.preventDefault();
+              setCode(sanitizeCode(event.clipboardData.getData('text')));
+            }}
+            maxLength={ROOM_CODE_LENGTH}
+            className="text-center font-mono text-lg uppercase tracking-[0.3em]"
+          />
+          <Button
+            data-testid="join-button"
+            type="submit"
+            variant="secondary"
+            disabled={!usernameValid || !codeValid || busy}
+            className="w-full"
+          >
+            Join room
+          </Button>
+        </form>
+
+        {joinError && (
+          <p data-testid="join-error" role="alert" className="text-center text-sm text-danger-hi">
+            {joinError}
+          </p>
+        )}
+      </Panel>
     </main>
   );
 }

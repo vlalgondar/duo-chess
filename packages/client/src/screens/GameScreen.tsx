@@ -18,6 +18,7 @@ import { SoundToggle } from '../components/SoundToggle.js';
 import { Spectators } from '../components/Spectators.js';
 import { TeamPanel } from '../components/TeamPanel.js';
 import { VoteActions } from '../components/VoteActions.js';
+import { Panel } from '../ui/Panel.js';
 
 interface GameScreenProps {
   view: ClientRoomView;
@@ -46,10 +47,18 @@ const ANNOTATION_COLORS: Record<'WHITE' | 'BLACK', Record<AnnotationColor, strin
   BLACK: { A: '#8b5cf6', B: '#a3e635' }, // violet-500 / lime-400
 };
 
-// Same §5.10 formula BoardScreen's sandbox uses — see that file's comment for why the 220px
-// deduction exists (bottom-sheet peeked height + flip-button headroom below 900px).
+// Same §5.10 mobile formula BoardScreen's sandbox uses — see that file's comment for why the
+// 220px deduction exists (bottom-sheet peeked height + flip-button headroom below 900px).
+// Desktop (>=900px) keeps `w-full` (so a narrow-but->=900px window still shrinks the board to
+// fit its actual flex column, same as before) but replaces the flat `max-w-[560px]` cap with a
+// "min(cap, calc(100dvh - chrome))" ceiling: the header (sound/status/vote row), two player-name
+// bars, two clocks, and `p-6` main padding add up to ~296px of non-board chrome, rounded up to
+// 340px for slack — without this the board's own fixed 560px cap plus that chrome regularly
+// exceeds real browser window heights, forcing the whole page to scroll. `max(360px, ...)`
+// floors the board so it never shrinks to something unplayable on a very short window (a little
+// scroll there is the better trade-off).
 const BOARD_SIZE_CLASSNAME =
-  'mx-auto w-[min(100vw,calc(100dvh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[560px]';
+  'mx-auto w-[min(100vw,calc(100dvh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[max(360px,min(560px,calc(100dvh_-_340px)))]';
 
 /**
  * Networked game screen (T-14, propose/accept UI wired up in T-20). No optimistic commit: the
@@ -79,8 +88,10 @@ export function GameScreen({
 
   if (!game) {
     return (
-      <main className="flex min-h-dvh items-center justify-center bg-slate-950 text-slate-100">
-        <p data-testid="game-status">Waiting for the game to start…</p>
+      <main className="flex min-h-dvh items-center justify-center">
+        <p data-testid="game-status" className="text-text-muted">
+          Waiting for the game to start…
+        </p>
       </main>
     );
   }
@@ -147,10 +158,14 @@ export function GameScreen({
 
   const chatProps = { messages: view.chat, teamChatAvailable, onSend: onSendChat };
 
+  const isFinished = game.status !== 'ACTIVE';
+  const topRoster = view.seats.filter((s) => s.team === top).map((s) => s.username);
+  const bottomRoster = view.seats.filter((s) => s.team === bottom).map((s) => s.username);
+
   return (
     <main
       data-testid="game-shell"
-      className="flex min-h-dvh flex-col bg-slate-950 text-slate-100 min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
+      className="flex min-h-dvh flex-col min-[900px]:flex-row min-[900px]:items-stretch min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
     >
       <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:p-0">
         {/* Mobile only: at 390px wide this column is ~870px tall (well past any phone's
@@ -160,13 +175,23 @@ export function GameScreen({
             there's no sheet: `min-[900px]:*` resets it back to a plain child of the
             `gap-4 items-center` column, pixel-identical to the un-wrapped siblings before
             this change. */}
-        <div className="sticky top-0 z-20 flex w-screen flex-row flex-wrap items-center justify-center gap-2 bg-slate-950 py-2 min-[900px]:static min-[900px]:w-auto min-[900px]:flex-col min-[900px]:gap-4 min-[900px]:bg-transparent min-[900px]:py-0">
+        {/* This row stays `flex-row flex-wrap` at every width, including desktop — it used to
+            switch to `min-[900px]:flex-col`, stacking sound/status/vote vertically for no
+            functional reason and eating ~100-150px of vertical space the desktop board formula
+            above now needs back. */}
+        <div className="sticky top-0 z-20 flex w-screen flex-row flex-wrap items-center justify-center gap-2 bg-bg py-2 min-[900px]:static min-[900px]:w-auto min-[900px]:bg-transparent min-[900px]:py-0">
           <SoundToggle enabled={soundEnabled} onToggle={onToggleSound} />
-          <p data-testid="game-status" className="text-sm text-slate-400">
+          <p
+            data-testid="game-status"
+            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-semibold ${
+              !isFinished && isYourTurn ? 'bg-accent/15 text-accent' : 'bg-surface-2 text-text-muted'
+            }`}
+          >
+            <span className={`h-2 w-2 rounded-full ${!isFinished && isYourTurn ? 'bg-accent' : 'bg-text-dim'}`} />
             {statusText}
           </p>
           {teammateDisconnected && (
-            <p data-testid="teammate-disconnected" className="text-sm text-amber-400">
+            <p data-testid="teammate-disconnected" className="text-sm text-warning">
               {teammateUsername} disconnected — you can move alone
             </p>
           )}
@@ -183,6 +208,15 @@ export function GameScreen({
         {/* §5.7: promotion is never offered here — `onPromote` omitted — since it's
             rejected outside LOBBY/TEAM_SELECT anyway (roomEngine.promoteSpectator). */}
         <Spectators spectators={view.spectators} seats={view.seats} />
+
+        {/* §5.5's player-name bars ("[Team 2: alice, bob]" above the board, "[Team 1: you,
+            carol]" below) — desktop only, so the mobile vertical budget and the 220px board
+            deduction above are untouched. */}
+        {topRoster.length > 0 && (
+          <p className="hidden text-xs text-text-dim min-[900px]:block">
+            {top === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {topRoster.join(', ')}
+          </p>
+        )}
         {showClocks && (
           <Clock
             clock={game.clock}
@@ -213,17 +247,28 @@ export function GameScreen({
             active={game.status === 'ACTIVE' && game.sideToMove === bottom}
           />
         )}
+        {bottomRoster.length > 0 && (
+          <p className="hidden text-xs text-text-dim min-[900px]:block">
+            {bottom === 'WHITE' ? 'Team 1 — White' : 'Team 2 — Black'}: {bottomRoster.join(', ')}
+          </p>
+        )}
       </div>
 
-      <aside
+      {/* `items-stretch` on the row above makes this match the board column's own rendered
+          height (header through bottom player-name bar) instead of the old flat `h-[80dvh]`
+          guess — that mismatch was why chat read as floating "way above" the board. `max-h`
+          is just a ceiling so the panel's own minimum content (TeamPanel buttons + chat input)
+          can never push the page past the viewport on a very short window; `Chat`'s existing
+          internal `overflow-y-auto` absorbs that instead. */}
+      <Panel
         data-testid="side-panel"
-        className="hidden min-h-0 w-72 flex-col rounded-lg bg-slate-900 min-[900px]:flex min-[900px]:h-[80dvh]"
+        className="hidden min-h-0 w-72 flex-col min-[900px]:flex min-[900px]:max-h-[calc(100dvh_-_48px)]"
       >
         <TeamPanel {...teamPanelProps} />
-        <div className="flex min-h-0 flex-1 flex-col border-t border-slate-800">
+        <div className="flex min-h-0 flex-1 flex-col border-t border-line">
           <Chat {...chatProps} />
         </div>
-      </aside>
+      </Panel>
 
       <BottomSheet teamPanel={teamPanelProps} chat={chatProps} />
     </main>

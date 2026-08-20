@@ -69,9 +69,9 @@ export function Clock({ clock, team, sideToMove, serverClockOffsetMs, active }: 
   return (
     <span
       data-testid={`clock-${team.toLowerCase()}`}
-      className={`rounded px-3 py-1 font-mono text-lg tabular-nums ${
-        active ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-300'
-      } ${low ? 'text-red-400' : ''}`}
+      className={`rounded-lg border-2 px-4 py-1.5 font-mono text-xl font-semibold tabular-nums transition-colors ${
+        active ? 'border-accent bg-surface-2 text-text' : 'border-transparent bg-surface-2 text-text-muted'
+      } ${low ? 'text-danger-hi' : ''}`}
     >
       {formatRemaining(remaining)}
       {/* Test-only accessor (same spirit as `Board`'s `data-testid="fen"`) — `formatRemaining`

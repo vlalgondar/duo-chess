@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { ChatChannel, ChatMessage } from '@duo/shared';
+import { Button } from '../ui/Button.js';
+import { Eye } from '../ui/Icon.js';
 
 interface ChatProps {
   messages: ChatMessage[];
@@ -58,15 +60,15 @@ export function Chat({ messages, teamChatAvailable, onSend }: ChatProps) {
             data-testid={`chat-channel-${c.toLowerCase()}`}
             aria-pressed={activeChannel === c}
             onClick={() => setChannel(c)}
-            className={`relative rounded px-3 py-1 text-xs font-medium ${
-              activeChannel === c ? 'bg-emerald-700 text-slate-100' : 'bg-slate-800 text-slate-400'
+            className={`relative flex h-11 items-center justify-center rounded-lg px-3 text-xs font-medium transition-colors ${
+              activeChannel === c ? 'bg-primary text-white' : 'bg-surface-2 text-text-muted'
             }`}
           >
             {CHANNEL_LABEL[c]}
             {activeChannel !== c && unread[c] > 0 && (
               <span
                 data-testid={`chat-unread-${c.toLowerCase()}`}
-                className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-sky-400"
+                className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-accent"
               />
             )}
           </button>
@@ -74,11 +76,18 @@ export function Chat({ messages, teamChatAvailable, onSend }: ChatProps) {
       </div>
 
       <div data-testid="chat-messages" className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-sm">
-        {shown.length === 0 && <p className="text-slate-500">No messages yet</p>}
+        {shown.length === 0 && <p className="text-text-dim">No messages yet</p>}
         {shown.map((m) => (
-          <p key={m.id} data-testid="chat-message" className={m.isSpectator ? 'text-slate-500' : 'text-slate-200'}>
+          <p key={m.id} data-testid="chat-message" className={m.isSpectator ? 'text-text-dim' : 'text-text'}>
             <span className="font-medium">
-              {m.isSpectator ? `\u{1F441} ${m.fromName}` : m.fromName}
+              {m.isSpectator ? (
+                <span className="inline-flex items-center gap-1">
+                  <Eye className="h-3 w-3" aria-hidden="true" />
+                  {m.fromName}
+                </span>
+              ) : (
+                m.fromName
+              )}
             </span>
             : {m.text}
           </p>
@@ -92,15 +101,12 @@ export function Chat({ messages, teamChatAvailable, onSend }: ChatProps) {
           onChange={(event) => setText(event.target.value)}
           maxLength={MAX_CHAT_LENGTH}
           placeholder={`Message ${CHANNEL_LABEL[activeChannel]}…`}
-          className="h-11 min-w-0 flex-1 rounded bg-slate-800 px-3 text-sm text-slate-100 placeholder:text-slate-500"
+          aria-label={`Message ${CHANNEL_LABEL[activeChannel]}`}
+          className="h-11 min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-3 text-sm text-text placeholder:text-text-dim"
         />
-        <button
-          type="submit"
-          data-testid="chat-send"
-          className="h-11 shrink-0 rounded bg-emerald-700 px-4 text-sm font-semibold text-slate-100"
-        >
+        <Button type="submit" data-testid="chat-send" variant="primary">
           Send
-        </button>
+        </Button>
       </form>
     </div>
   );

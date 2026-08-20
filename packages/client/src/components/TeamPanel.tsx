@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useState } from 'react';
 import type { WireProposal } from '@duo/shared';
+import { Button } from '../ui/Button.js';
 
 interface TeamPanelProps {
   /** The viewer's own team's live proposal (`view.proposal`, already team-scoped by `redactFor`). */
@@ -21,14 +22,15 @@ interface TeamPanelProps {
   onWithdraw?: (proposalId: string) => void;
 }
 
-const BUTTON_BASE = 'flex h-12 min-w-[48px] items-center justify-center rounded px-4 text-sm font-semibold text-slate-100';
-
 /**
  * `docs/DESIGN.md` §5.5 "Proposal visuals" / §4.3 rule 5: shows the live proposal in SAN, who
  * proposed it, and its age; Accept/Reject/Counter-propose for the accepter, Withdraw for the
  * proposer. Accept is disabled for 250ms after the slot changes (keyed on `proposal.id`, not
  * server time, since the anti-misclick window is about *this client noticing a change*, not
- * anything the server clock needs to agree on).
+ * anything the server clock needs to agree on). The card also re-keys on `proposal.id` so its
+ * `proposal-pulse` CSS animation replays on every slot change (§5.5: "a brief highlight pulse
+ * so the change is visible rather than mysterious") — same re-key trick `TeamSelect`'s shake
+ * animation already relies on.
  */
 export function TeamPanel({
   proposal = null,
@@ -59,15 +61,15 @@ export function TeamPanel({
 
   if (!proposal) {
     return (
-      <div data-testid="team-panel" className="flex items-center justify-between gap-3 px-3 py-2">
-        <p className="text-sm text-slate-400">No proposal yet</p>
+      <div data-testid="team-panel" className="flex items-center justify-between gap-3 px-3 py-2.5">
+        <p className="text-sm text-text-dim">No proposal yet</p>
         <div className="flex gap-2">
-          <button type="button" data-testid="accept-button" disabled className={`${BUTTON_BASE} bg-emerald-700 disabled:opacity-40`}>
+          <Button type="button" data-testid="accept-button" variant="primary" size="lg" disabled>
             Accept
-          </button>
-          <button type="button" data-testid="reject-button" disabled className={`${BUTTON_BASE} bg-red-700 disabled:opacity-40`}>
+          </Button>
+          <Button type="button" data-testid="reject-button" variant="danger" size="lg" disabled>
             Reject
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -77,62 +79,54 @@ export function TeamPanel({
 
   if (isProposer) {
     return (
-      <div data-testid="team-panel" className="flex flex-col gap-2 px-3 py-2">
-        <p className="text-sm text-slate-200">
-          <span data-testid="proposal-san" className="font-semibold">
+      <div key={proposal.id} data-testid="team-panel" className="proposal-pulse flex flex-col gap-2 px-3 py-2.5">
+        <p className="text-sm text-text">
+          <span data-testid="proposal-san" className="font-mono text-lg font-semibold text-accent">
             {proposal.san}
           </span>{' '}
-          — waiting for {teammateUsername ?? 'your teammate'}…
+          <span className="text-text-muted">— waiting for {teammateUsername ?? 'your teammate'}…</span>
         </p>
-        <button
-          type="button"
-          data-testid="withdraw-button"
-          onClick={() => onWithdraw?.(proposal.id)}
-          className={`${BUTTON_BASE} bg-slate-700`}
-        >
+        <Button type="button" data-testid="withdraw-button" variant="secondary" onClick={() => onWithdraw?.(proposal.id)}>
           Withdraw
-        </button>
+        </Button>
       </div>
     );
   }
 
   return (
-    <div data-testid="team-panel" className="flex flex-col gap-2 px-3 py-2">
-      <p className="text-sm text-slate-200">
-        <span className="font-medium">{proposerUsername ?? 'Your teammate'}</span> proposes{' '}
-        <span data-testid="proposal-san" className="font-semibold">
+    <div key={proposal.id} data-testid="team-panel" className="proposal-pulse flex flex-col gap-2 px-3 py-2.5">
+      <p className="text-sm text-text">
+        <span className="font-medium">{proposerUsername ?? 'Your teammate'}</span>{' '}
+        <span className="text-text-muted">proposes</span>{' '}
+        <span data-testid="proposal-san" className="font-mono text-lg font-semibold text-accent">
           {proposal.san}
         </span>
-        <span data-testid="proposal-age" className="ml-1 text-xs text-slate-500">
+        <span data-testid="proposal-age" className="ml-1 text-xs text-text-dim">
           {ageSeconds}s ago
         </span>
       </p>
       <div className="flex gap-2">
-        <button
+        <Button
           type="button"
           data-testid="accept-button"
+          variant="primary"
+          size="lg"
           disabled={!acceptReady}
           onClick={() => onAccept?.(proposal.id)}
-          className={`${BUTTON_BASE} bg-emerald-700 disabled:opacity-40`}
         >
           Accept
-        </button>
-        <button
-          type="button"
-          data-testid="reject-button"
-          onClick={() => onReject?.(proposal.id)}
-          className={`${BUTTON_BASE} bg-red-700`}
-        >
+        </Button>
+        <Button type="button" data-testid="reject-button" variant="danger" size="lg" onClick={() => onReject?.(proposal.id)}>
           Reject
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           data-testid="counter-propose-button"
+          variant="ghost"
           title="Drag or tap a different move on the board to counter-propose"
-          className={`${BUTTON_BASE} bg-slate-700`}
         >
           Counter-propose
-        </button>
+        </Button>
       </div>
     </div>
   );

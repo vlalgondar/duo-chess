@@ -411,9 +411,7 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
-        <div className="fixed right-3 top-3 z-50">
-          <RttIndicator rttMs={rttMs} />
-        </div>
+        <RttIndicator rttMs={rttMs} />
         <GameScreen
           view={view}
           onMove={handleMove}
@@ -435,9 +433,7 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
-        <div className="fixed right-3 top-3 z-50">
-          <RttIndicator rttMs={rttMs} />
-        </div>
+        <RttIndicator rttMs={rttMs} />
         <TeamSelect
           view={view}
           lastError={lastError}
@@ -457,9 +453,7 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
-        <div className="fixed right-3 top-3 z-50">
-          <RttIndicator rttMs={rttMs} />
-        </div>
+        <RttIndicator rttMs={rttMs} />
         <ResultScreen view={view} onRematch={handleRematch} onLeave={handleLeave} />
       </>
     );

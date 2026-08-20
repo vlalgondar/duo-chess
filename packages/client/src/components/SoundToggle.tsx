@@ -1,3 +1,5 @@
+import { Volume2, VolumeX } from '../ui/Icon.js';
+
 interface SoundToggleProps {
   enabled: boolean;
   onToggle: () => void;
@@ -10,11 +12,12 @@ export function SoundToggle({ enabled, onToggle }: SoundToggleProps) {
       type="button"
       data-testid="sound-toggle"
       aria-pressed={enabled}
+      aria-label={enabled ? 'Mute sound' : 'Unmute sound'}
       onClick={onToggle}
       title={enabled ? 'Sound on' : 'Sound off'}
-      className="rounded px-2 py-1 text-sm text-slate-400 hover:text-slate-100"
+      className="flex h-11 w-11 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
     >
-      {enabled ? '🔊' : '🔇'}
+      {enabled ? <Volume2 className="h-5 w-5" aria-hidden="true" /> : <VolumeX className="h-5 w-5" aria-hidden="true" />}
     </button>
   );
 }
