@@ -1,7 +1,18 @@
-import { forwardRef, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  createContext,
+  forwardRef,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { Chess, type Square } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import type { AnnotationColor, WireAnnotation } from '@duo/shared';
+import { diffFen, type FenDiff, type PieceColor } from '../boardDiff.js';
 
 // `react-chessboard`'s own prop types (`CustomSquareProps`, its `Square`/`Piece` aliases)
 // aren't re-exported from the package root, only from an internal dist path — so these are
@@ -56,11 +67,6 @@ const RING_STYLE: CSSProperties = {
 const HOVER_DOT_STYLE: CSSProperties = { ...DOT_STYLE, opacity: 0.5 };
 const HOVER_RING_STYLE: CSSProperties = { ...RING_STYLE, opacity: 0.5 };
 
-interface LastMove {
-  from: Square;
-  to: Square;
-}
-
 /**
  * `docs/DESIGN.md` §5.5 "Proposal visuals": a translucent ghost piece on the
  * destination square plus a solid arrow, in the team's accent color. Unicode
@@ -92,6 +98,40 @@ interface SquareContentProps {
   style: CSSProperties;
 }
 
+interface SquareOverlay {
+  dotSquares: ReadonlySet<Square>;
+  ringSquares: ReadonlySet<Square>;
+  ghost: { square: Square; glyph: string; accentColor: string } | null;
+  hoverDotSquares: ReadonlySet<Square>;
+  hoverRingSquares: ReadonlySet<Square>;
+  onHoverSquare: ((square: Square | null) => void) | undefined;
+  /**
+   * `react-chessboard` only animates a piece that has a matching destination in its own
+   * position diff — a capture victim, an en-passant pawn, or a promoting pawn has none, so it
+   * stays mounted at full opacity for the whole `animationDuration` while the mover slides over
+   * it. Squares here get `data-vanished` so `index.css`'s `duo-vanished-piece` rule can fade the
+   * stranded piece out instead of leaving it visible (see `boardDiff.ts`).
+   */
+  vanished: Readonly<Partial<Record<Square, PieceColor>>>;
+}
+
+const EMPTY_OVERLAY: SquareOverlay = {
+  dotSquares: new Set(),
+  ringSquares: new Set(),
+  ghost: null,
+  hoverDotSquares: new Set(),
+  hoverRingSquares: new Set(),
+  onHoverSquare: undefined,
+  vanished: {},
+};
+
+// A React context, not a prop threaded through `customSquare` itself, is what keeps this
+// component's *type* stable across renders — `react-chessboard` remounts every square (and every
+// piece inside it, losing its in-flight slide transform) whenever `customSquare` is a new
+// function/class each render, which is exactly what the previous `makeSquareContent(...)` factory
+// produced on every FEN change.
+const SquareOverlayContext = createContext<SquareOverlay>(EMPTY_OVERLAY);
+
 /**
  * Renders inside the library's own drop-target square div — see the comment above. Built with
  * `forwardRef` so the library's own square-position tracking (used for arrows, T-22) still gets
@@ -100,57 +140,58 @@ interface SquareContentProps {
  * `ref` under `exactOptionalPropertyTypes`, which is a typing gap in the library, not a real
  * incompatibility in the props actually passed at runtime.
  */
-function makeSquareContent(
-  dotSquares: Set<Square>,
-  ringSquares: Set<Square>,
-  ghost: { square: Square; glyph: string; accentColor: string } | null,
-  hoverDotSquares: Set<Square>,
-  hoverRingSquares: Set<Square>,
-  onHoverSquare: ((square: Square | null) => void) | undefined,
+const SquareContentImpl = forwardRef<HTMLDivElement, SquareContentProps>(function SquareContent(
+  { children, square, style },
+  ref,
 ) {
-  const SquareContent = forwardRef<HTMLDivElement, SquareContentProps>(function SquareContent(
-    { children, square, style },
-    ref,
-  ) {
-    return (
-      <div
-        ref={ref}
-        style={{ ...style, position: 'relative' }}
-        onMouseEnter={onHoverSquare && (() => onHoverSquare(square as Square))}
-        onMouseLeave={onHoverSquare && (() => onHoverSquare(null))}
-      >
-        {children}
-        {dotSquares.has(square as Square) && <div data-testid="legal-dot" style={DOT_STYLE} />}
-        {ringSquares.has(square as Square) && <div data-testid="legal-ring" style={RING_STYLE} />}
-        {hoverDotSquares.has(square as Square) && <div data-testid="legal-dot-hover" style={HOVER_DOT_STYLE} />}
-        {hoverRingSquares.has(square as Square) && <div data-testid="legal-ring-hover" style={HOVER_RING_STYLE} />}
-        {ghost && ghost.square === square && (
-          <div
-            data-testid="proposal-ghost"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '250%',
-              lineHeight: 1,
-              color: ghost.accentColor,
-              opacity: 0.55,
-              pointerEvents: 'none',
-            }}
-          >
-            {ghost.glyph}
-          </div>
-        )}
-      </div>
-    );
-  });
-  return SquareContent as unknown as (props: SquareContentProps) => ReactNode;
-}
+  const { dotSquares, ringSquares, ghost, hoverDotSquares, hoverRingSquares, onHoverSquare, vanished } =
+    useContext(SquareOverlayContext);
+  const sq = square as Square;
+  return (
+    <div
+      ref={ref}
+      data-vanished={vanished[sq]}
+      style={{ ...style, position: 'relative' }}
+      onMouseEnter={onHoverSquare && (() => onHoverSquare(sq))}
+      onMouseLeave={onHoverSquare && (() => onHoverSquare(null))}
+    >
+      {children}
+      {dotSquares.has(sq) && <div data-testid="legal-dot" style={DOT_STYLE} />}
+      {ringSquares.has(sq) && <div data-testid="legal-ring" style={RING_STYLE} />}
+      {hoverDotSquares.has(sq) && <div data-testid="legal-dot-hover" style={HOVER_DOT_STYLE} />}
+      {hoverRingSquares.has(sq) && <div data-testid="legal-ring-hover" style={HOVER_RING_STYLE} />}
+      {ghost && ghost.square === sq && (
+        <div
+          data-testid="proposal-ghost"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '250%',
+            lineHeight: 1,
+            color: ghost.accentColor,
+            opacity: 0.55,
+            pointerEvents: 'none',
+          }}
+        >
+          {ghost.glyph}
+        </div>
+      )}
+    </div>
+  );
+});
+const SQUARE_CONTENT = SquareContentImpl as unknown as (props: SquareContentProps) => ReactNode;
 
 /** §5.9's 200ms long-press threshold — short enough to feel responsive, long enough not to fight piece dragging. */
 const LONG_PRESS_MS = 200;
+
+/**
+ * `react-chessboard`'s slide animation, shortened from its own 300ms default — see the
+ * `animationDuration` prop below for why 300ms made captures look laggy.
+ */
+const ANIMATION_MS = 180;
 
 /** Same gesture (kind + squares), ignoring color/author — the "repeat to erase" toggle key (§5.9). */
 function sameAnnotationShape(a: WireAnnotation, b: WireAnnotation): boolean {
@@ -264,7 +305,6 @@ export function Board({
   const [internalFen, setInternalFen] = useState(() => game.fen());
   const fen = networked ? (serverFen as string) : internalFen;
   const [selected, setSelected] = useState<Square | null>(null);
-  const [lastMove, setLastMove] = useState<LastMove | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
 
   // §5.3: "Also trigger on hover of your own pieces at low opacity" — desktop only (a touch
@@ -274,8 +314,30 @@ export function Board({
   const [desktopHover] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches,
   );
+  // Feature-detected once, same as `desktopHover` above — a user's reduced-motion preference
+  // doesn't change mid-session either. When set, the slide/fade below collapse to instant; the
+  // stylesheet's own `prefers-reduced-motion` block already does the same for the CSS fade.
+  const [reducedMotion] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  );
   const [hoverSquare, setHoverSquare] = useState<Square | null>(null);
   const hoverEnabled = desktopHover && !locked && !pendingPromotion && selected === null;
+
+  // Render-time resync, same pattern as `gameRef` above: recompute the FEN diff only when `fen`
+  // actually changes, not on every render (a proposal ghost, an annotation, or hover state all
+  // re-render `Board` without moving the position). Drives both the §5.5 last-move tint and
+  // which square(s) get `data-vanished` — see `SquareOverlay`'s doc comment for why the latter
+  // matters. Works the same in both modes: `react-chessboard` only skips its own animation for a
+  // *dragged* move (`wasManualDrop`), never for a clicked one, so the local sandbox's click-to-move
+  // path hits the exact same "stale piece lingers" library behavior networked play does.
+  const prevFenRef = useRef<string | null>(null);
+  const fenDiffRef = useRef<FenDiff>({ move: null, vanished: {} });
+  if (prevFenRef.current !== fen) {
+    fenDiffRef.current = prevFenRef.current === null ? { move: null, vanished: {} } : diffFen(prevFenRef.current, fen);
+    prevFenRef.current = fen;
+  }
+  const lastMove = fenDiffRef.current.move;
+  const vanished = fenDiffRef.current.vanished;
 
   // T-22 board annotations (§5.9). `annotationsEnabled` is false for the local sandbox and for
   // spectators/unassigned seats — neither has a color to draw with.
@@ -429,17 +491,17 @@ export function Board({
     return { square: proposal.to, glyph: GHOST_GLYPHS[piece.color][type], accentColor: proposal.accentColor };
   }, [proposal, game, fen]);
 
-  const SquareContent = useMemo(
-    () =>
-      makeSquareContent(
-        dotSquares,
-        ringSquares,
-        ghost,
-        hoverDotSquares,
-        hoverRingSquares,
-        hoverEnabled ? setHoverSquare : undefined,
-      ),
-    [dotSquares, ringSquares, ghost, hoverDotSquares, hoverRingSquares, hoverEnabled],
+  const squareOverlay = useMemo<SquareOverlay>(
+    () => ({
+      dotSquares,
+      ringSquares,
+      ghost,
+      hoverDotSquares,
+      hoverRingSquares,
+      onHoverSquare: hoverEnabled ? setHoverSquare : undefined,
+      vanished,
+    }),
+    [dotSquares, ringSquares, ghost, hoverDotSquares, hoverRingSquares, hoverEnabled, vanished],
   );
 
   const arrow = useMemo(() => {
@@ -467,7 +529,6 @@ export function Board({
       return false;
     }
     setInternalFen(game.fen());
-    setLastMove({ from, to });
     setSelected(null);
     setPendingPromotion(null);
     return true;
@@ -519,26 +580,33 @@ export function Board({
       <span data-testid="fen" className="sr-only">
         {fen}
       </span>
-      <Chessboard
-        position={fen}
-        boardOrientation={orientation}
-        onSquareClick={handleSquareClick}
-        onPieceDrop={handlePieceDrop}
-        onPromotionCheck={() => false}
-        customSquare={SquareContent}
-        customSquareStyles={customSquareStyles}
-        customDarkSquareStyle={{ backgroundColor: '#4E7A55' }}
-        customLightSquareStyle={{ backgroundColor: '#EBE3D2' }}
-        customBoardStyle={{
-          borderRadius: '0.75rem',
-          boxShadow: '0 0 0 1px rgba(217, 164, 65, 0.35), 0 12px 24px -8px rgba(0, 0, 0, 0.55)',
-        }}
-        arePiecesDraggable={!locked}
-        // The library's own right-click-drag arrow feature is superseded by our own overlay
-        // below (per-annotation colors, plus circles, which it has no concept of) — disabled so
-        // it never renders a second, undifferentiated arrow underneath ours.
-        areArrowsAllowed={false}
-      />
+      <SquareOverlayContext.Provider value={squareOverlay}>
+        <Chessboard
+          position={fen}
+          boardOrientation={orientation}
+          onSquareClick={handleSquareClick}
+          onPieceDrop={handlePieceDrop}
+          onPromotionCheck={() => false}
+          customSquare={SQUARE_CONTENT}
+          customSquareStyles={customSquareStyles}
+          customDarkSquareStyle={{ backgroundColor: '#4E7A55' }}
+          customLightSquareStyle={{ backgroundColor: '#EBE3D2' }}
+          customBoardStyle={{
+            borderRadius: '0.75rem',
+            boxShadow: '0 0 0 1px rgba(217, 164, 65, 0.35), 0 12px 24px -8px rgba(0, 0, 0, 0.55)',
+          }}
+          arePiecesDraggable={!locked}
+          // The library's own right-click-drag arrow feature is superseded by our own overlay
+          // below (per-annotation colors, plus circles, which it has no concept of) — disabled so
+          // it never renders a second, undifferentiated arrow underneath ours.
+          areArrowsAllowed={false}
+          // Shorter than the library's own 300ms default (§ "captures lag" fix) — 300ms was long
+          // enough that a captured piece, which the library never animates (see `SquareOverlay`'s
+          // doc comment), stayed visibly stranded for a very noticeable beat. 0 under
+          // `prefers-reduced-motion`, matching the stylesheet's own reduced-motion handling.
+          animationDuration={reducedMotion ? 0 : ANIMATION_MS}
+        />
+      </SquareOverlayContext.Provider>
 
       {/* §5.9: teammate-only scribbles, `pointer-events: none` so they never intercept a click
           or drag through an annotated square — see the mouse/touch handlers above for drawing. */}

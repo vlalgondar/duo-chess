@@ -89,6 +89,23 @@
   animation: proposal-pulse 0.6s ease-out;
 }
 
+@keyframes duo-vanished-piece {
+  to {
+    opacity: 0;
+  }
+}
+
+/* `react-chessboard` keeps the pre-move position mounted for its whole `animationDuration`, so a
+   captured piece (or an en-passant/promotion casualty) stays on screen while the mover slides
+   over it — it only animates a piece that has a matching destination. `Board.tsx` marks the
+   square with the leaving piece's color via `data-vanished`; scoping the rule by color is what
+   makes it self-clearing — the piece that lands on that square afterward is always the opposite
+   color, so a stale `data-vanished` attribute can never hide the piece that replaced it. */
+[data-vanished='w'] > [data-piece^='w'],
+[data-vanished='b'] > [data-piece^='b'] {
+  animation: duo-vanished-piece 70ms ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .shake,
   .proposal-pulse {

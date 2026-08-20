@@ -31,6 +31,26 @@ test('en-passant and both castling targets appear as legal-move indicators', asy
   await expect(page.locator('[data-square="d6"] [data-testid="legal-ring"]')).toHaveCount(1);
 });
 
+test('a capture marks the victim square vanished and tints both last-move squares', async ({ page }) => {
+  // White pawn on e4 can capture the black pawn on d5.
+  await page.goto(boardUrl('rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2'));
+
+  await tapSquare(page, 'e4');
+  await tapSquare(page, 'd5');
+
+  // `react-chessboard` never animates a captured piece (it has no matching destination in its
+  // own position diff) — `data-vanished` is what lets `index.css`'s `duo-vanished-piece` rule
+  // fade it out instead of leaving it stranded on screen for the whole slide.
+  await expect(page.locator('[data-square="d5"] > [data-vanished]')).toHaveAttribute('data-vanished', 'b');
+
+  // `LAST_MOVE_STYLE` is merged into `customSquareStyles`, which `react-chessboard` applies to
+  // its `CustomSquare` (our overlay div), not the outer `[data-square]` div — that one only ever
+  // carries the board's own light/dark square color.
+  const lastMoveTint = 'rgba(56, 189, 248, 0.35)';
+  await expect(page.locator('[data-square="e4"] > div')).toHaveCSS('background-color', lastMoveTint);
+  await expect(page.locator('[data-square="d5"] > div')).toHaveCSS('background-color', lastMoveTint);
+});
+
 test('an illegal drag leaves the FEN unchanged', async ({ page, isMobile }) => {
   test.skip(isMobile, 'drag uses react-dnd\'s HTML5 backend, which only wires up on non-touch clients');
 
