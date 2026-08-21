@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { materialFromFen } from './material.js';
+import { groupCaptured, materialFromFen, type MaterialPiece } from './material.js';
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -70,5 +70,30 @@ describe('materialFromFen', () => {
       capturedByBlack: fullTray,
       advantage: 0,
     });
+  });
+});
+
+describe('groupCaptured', () => {
+  it('is empty for an empty tray', () => {
+    expect(groupCaptured([])).toEqual([]);
+  });
+
+  it('wraps a single piece in a run of one', () => {
+    expect(groupCaptured(['p'])).toEqual([{ piece: 'p', count: 1 }]);
+  });
+
+  it('collapses a run of identical pieces', () => {
+    expect(groupCaptured(['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'])).toEqual([{ piece: 'p', count: 8 }]);
+  });
+
+  it('groups the full mixed tray into one run per piece type, in PIECE_ORDER', () => {
+    const fullTray: MaterialPiece[] = ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p', 'n', 'n', 'b', 'b', 'r', 'r', 'q'];
+    expect(groupCaptured(fullTray)).toEqual([
+      { piece: 'p', count: 8 },
+      { piece: 'n', count: 2 },
+      { piece: 'b', count: 2 },
+      { piece: 'r', count: 2 },
+      { piece: 'q', count: 1 },
+    ]);
   });
 });

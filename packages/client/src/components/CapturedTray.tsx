@@ -1,4 +1,4 @@
-import type { MaterialPiece } from '../material.js';
+import { groupCaptured, type MaterialPiece } from '../material.js';
 import { GHOST_GLYPHS } from './Board.js';
 
 interface CapturedTrayProps {
@@ -27,9 +27,8 @@ const PIECE_NAME: Record<MaterialPiece, string> = {
 
 function summarize(pieces: readonly MaterialPiece[]): string {
   if (pieces.length === 0) return 'No pieces captured';
-  const counts = new Map<MaterialPiece, number>();
-  for (const piece of pieces) counts.set(piece, (counts.get(piece) ?? 0) + 1);
-  return `Captured: ${[...counts.entries()].map(([piece, n]) => `${n} ${PIECE_NAME[piece]}${n > 1 ? 's' : ''}`).join(', ')}`;
+  const runs = groupCaptured(pieces);
+  return `Captured: ${runs.map(({ piece, count }) => `${count} ${PIECE_NAME[piece]}${count > 1 ? 's' : ''}`).join(', ')}`;
 }
 
 /**
@@ -45,19 +44,30 @@ export function CapturedTray({ pieces, capturedColor, advantage }: CapturedTrayP
     <span
       data-testid={`captured-tray-${capturedColor}`}
       aria-label={summarize(pieces)}
-      className="flex items-center leading-none"
+      className="flex shrink-0 items-center leading-none"
     >
-      <span className="flex text-lg" style={{ color: TINT[capturedColor] }} aria-hidden="true">
-        {pieces.map((piece, i) => (
-          <span key={`${piece}-${i}`} style={i === 0 ? undefined : { marginLeft: '-0.4em' }}>
-            {GHOST_GLYPHS.b[piece]}
+      <span
+        className="flex shrink-0 items-center gap-[0.2em] text-base"
+        style={{ color: TINT[capturedColor] }}
+        aria-hidden="true"
+      >
+        {groupCaptured(pieces).map(({ piece, count }) => (
+          <span key={piece} className="flex shrink-0">
+            {Array.from({ length: count }, (_, i) => (
+              // Overlap only within a run of identical pieces — the glyphs are dense filled
+              // silhouettes, so overlapping *different* shapes (the pre-fix behavior) merged
+              // them into an unreadable blob instead of a readable stack.
+              <span key={i} className="shrink-0" style={i === 0 ? undefined : { marginLeft: '-0.28em' }}>
+                {GHOST_GLYPHS.b[piece]}
+              </span>
+            ))}
           </span>
         ))}
       </span>
       {!!advantage && advantage > 0 && (
         <span
           data-testid={`material-advantage-${capturedColor}`}
-          className="ml-1 text-xs font-semibold text-text-dim"
+          className="ml-1 shrink-0 text-xs font-semibold text-text-dim"
         >
           +{advantage}
         </span>

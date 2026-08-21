@@ -26,6 +26,28 @@ export interface Material {
   advantage: number;
 }
 
+export interface CapturedRun {
+  piece: MaterialPiece;
+  count: number;
+}
+
+/**
+ * Collapses consecutive identical pieces into runs, e.g. `[p,p,p,n]` -> `[{p,3},{n,1}]`.
+ * `materialFromFen` already emits pieces grouped by `PIECE_ORDER` (smallest-to-largest), so a
+ * single linear pass is enough — no sorting needed. `CapturedTray` renders one run per group
+ * (tight overlap within a run, a gap between runs) instead of overlapping every glyph
+ * regardless of piece type, which is what made a mixed tray unreadable.
+ */
+export function groupCaptured(pieces: readonly MaterialPiece[]): CapturedRun[] {
+  const runs: CapturedRun[] = [];
+  for (const piece of pieces) {
+    const last = runs[runs.length - 1];
+    if (last && last.piece === piece) last.count += 1;
+    else runs.push({ piece, count: 1 });
+  }
+  return runs;
+}
+
 type Counts = Record<MaterialPiece, number>;
 
 function emptyCounts(): Counts {
