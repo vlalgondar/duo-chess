@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useState } from 'react';
 import type { WireProposal } from '@duo/shared';
 import { Button } from '../ui/Button.js';
+import { useRoomStore } from '../store.js';
 
 interface TeamPanelProps {
   /** The viewer's own team's live proposal (`view.proposal`, already team-scoped by `redactFor`). */
@@ -15,8 +16,6 @@ interface TeamPanelProps {
    * keep exercising the same disabled Accept/Reject placeholder they always have.
    */
   requiresConfirmation?: boolean;
-  /** `serverNow - Date.now()` (see `store.ts`) — used only for the "Xs ago" age display. */
-  serverClockOffsetMs?: number;
   onAccept?: (proposalId: string) => void;
   onReject?: (proposalId: string) => void;
   onWithdraw?: (proposalId: string) => void;
@@ -38,11 +37,13 @@ export function TeamPanel({
   proposerUsername,
   teammateUsername,
   requiresConfirmation,
-  serverClockOffsetMs = 0,
   onAccept,
   onReject,
   onWithdraw,
 }: TeamPanelProps) {
+  // Read directly rather than taking it as a prop (as it used to) — a `clock_sync` arrives
+  // every 5s and used to re-render `App`'s whole tree just to keep this offset current here.
+  const serverClockOffsetMs = useRoomStore((s) => s.serverClockOffsetMs);
   const [acceptReady, setAcceptReady] = useState(false);
   const [, tick] = useReducer((n: number) => n + 1, 0);
 

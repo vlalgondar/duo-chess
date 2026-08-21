@@ -1,6 +1,7 @@
 import {
   createContext,
   forwardRef,
+  memo,
   useContext,
   useEffect,
   useMemo,
@@ -82,7 +83,9 @@ export interface ProposalOverlay {
   accentColor: string;
 }
 
-const GHOST_GLYPHS: Record<'w' | 'b', Record<'p' | 'n' | 'b' | 'r' | 'q' | 'k', string>> = {
+// Exported for `CapturedTray`'s tray glyphs — same "public entry point only" precedent as the
+// rest of this file, just reused within our own package rather than duplicated.
+export const GHOST_GLYPHS: Record<'w' | 'b', Record<'p' | 'n' | 'b' | 'r' | 'q' | 'k', string>> = {
   w: { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕', k: '♔' },
   b: { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' },
 };
@@ -187,6 +190,9 @@ const SQUARE_CONTENT = SquareContentImpl as unknown as (props: SquareContentProp
 /** §5.9's 200ms long-press threshold — short enough to feel responsive, long enough not to fight piece dragging. */
 const LONG_PRESS_MS = 200;
 
+/** How far a touch can drift before it reads as a scroll instead of a held-still long-press. */
+const TOUCH_MOVE_SLOP_PX = 10;
+
 /**
  * `react-chessboard`'s slide animation, shortened from its own 300ms default — see the
  * `animationDuration` prop below for why 300ms made captures look laggy.
@@ -271,6 +277,45 @@ function createGame(fen: string): Chess {
 }
 
 /**
+ * §8 rule 8 ("avoid React re-render storms: memoize the board ... so a 60fps clock doesn't
+ * re-render 64 squares"): a length-and-shape compare for `annotations`, `Object.is` for
+ * everything else. `annotations` (`view.annotations`) is the one prop `redactFor()` rebuilds as
+ * a fresh array on *every* `state` broadcast even when its content didn't change (e.g. a vote or
+ * a settings edit that has nothing to do with drawings) — every other prop is either a
+ * primitive, a `useMemo`/`useCallback`-stabilized value from `GameScreen`, or a module-level
+ * constant (`ANNOTATION_COLORS`), so a plain reference compare is already correct for those.
+ */
+function annotationsEqual(a: readonly WireAnnotation[] | undefined, b: readonly WireAnnotation[] | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) return false;
+  return a.every((annotation, i) => {
+    const other = b[i]!;
+    return (
+      annotation.kind === other.kind &&
+      annotation.from === other.from &&
+      annotation.to === other.to &&
+      annotation.color === other.color
+    );
+  });
+}
+
+function boardPropsEqual(prev: BoardProps, next: BoardProps): boolean {
+  return (
+    prev.initialFen === next.initialFen &&
+    prev.orientation === next.orientation &&
+    prev.sizeClassName === next.sizeClassName &&
+    prev.serverFen === next.serverFen &&
+    prev.onMove === next.onMove &&
+    prev.locked === next.locked &&
+    prev.proposal === next.proposal &&
+    annotationsEqual(prev.annotations, next.annotations) &&
+    prev.ownAnnotationColor === next.ownAnnotationColor &&
+    prev.annotationColors === next.annotationColors &&
+    prev.onAnnotationsChange === next.onAnnotationsChange
+  );
+}
+
+/**
  * Fully controlled `react-chessboard` wrapper: every move is decided here first, then written
  * back into `position`, so an illegal drop or a promotion still awaiting a piece choice never
  * touches the rendered FEN. Two modes, chosen by whether `serverFen` is passed:
@@ -279,7 +324,7 @@ function createGame(fen: string): Chess {
  *  - **Networked** (T-14): `serverFen` set — renders exactly that FEN and calls `onMove` instead
  *    of committing, so nothing moves on screen until the server confirms it. Used by `GameScreen`.
  */
-export function Board({
+export const Board = memo(function Board({
   initialFen = START_FEN,
   orientation = 'white',
   sizeClassName = 'mx-auto w-full max-w-[640px]',
@@ -399,7 +444,7 @@ export function Board({
   // Touch equivalent (§5.9): long-press-tap for a circle, long-press-and-drag for an arrow.
   // `LONG_PRESS_MS` keeps a quick tap free to mean what it already means elsewhere (tap-tap
   // movement, T-12) rather than starting to draw.
-  const touchAnnotateRef = useRef<{ square: Square; longPress: boolean } | null>(null);
+  const touchAnnotateRef = useRef<{ square: Square; longPress: boolean; x: number; y: number } | null>(null);
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (touchTimerRef.current) clearTimeout(touchTimerRef.current); }, []);
 
@@ -407,13 +452,32 @@ export function Board({
     if (!annotationsEnabled) return;
     const touch = e.touches[0];
     const square = touch ? squareAtPoint(touch.clientX, touch.clientY) : null;
-    if (!square) return;
-    const state = { square, longPress: false };
+    if (!square || !touch) return;
+    const state = { square, longPress: false, x: touch.clientX, y: touch.clientY };
     touchAnnotateRef.current = state;
     if (touchTimerRef.current) clearTimeout(touchTimerRef.current);
     touchTimerRef.current = setTimeout(() => {
       state.longPress = true;
     }, LONG_PRESS_MS);
+  }
+
+  // Cancels the pending long-press the moment the finger moves more than a few px before it
+  // fires. The mobile column is always taller than the viewport (§5.10's scroll-to-reveal-the-
+  // sheet layout), so a scroll gesture starting on the board is routine — without this, one that
+  // outlasts `LONG_PRESS_MS` still reads as "long-press-and-drag" once it lifts, painting a
+  // phantom arrow from wherever the scroll started to wherever the finger happened to end up.
+  // Movement *after* the long press has already latched is untouched — that's a real drag.
+  function handleBoardTouchMove(e: React.TouchEvent) {
+    const state = touchAnnotateRef.current;
+    const touch = e.touches[0];
+    if (!state || !touch || state.longPress) return;
+    if (Math.hypot(touch.clientX - state.x, touch.clientY - state.y) > TOUCH_MOVE_SLOP_PX) {
+      if (touchTimerRef.current) {
+        clearTimeout(touchTimerRef.current);
+        touchTimerRef.current = null;
+      }
+      touchAnnotateRef.current = null;
+    }
   }
 
   function handleBoardTouchEnd(e: React.TouchEvent) {
@@ -573,6 +637,7 @@ export function Board({
       onMouseDown={handleBoardMouseDown}
       onMouseUp={handleBoardMouseUp}
       onTouchStart={handleBoardTouchStart}
+      onTouchMove={handleBoardTouchMove}
       onTouchEnd={handleBoardTouchEnd}
     >
       {/* Test-only accessor, same spirit as the harness's `debugState()` — lets e2e specs
@@ -725,4 +790,4 @@ export function Board({
       )}
     </div>
   );
-}
+}, boardPropsEqual);

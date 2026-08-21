@@ -106,6 +106,33 @@ test("the sheet's peeked height leaves the board fully visible", async ({ page }
   expect(board.y + board.height).toBeLessThanOrEqual(sheet.y);
 });
 
+/**
+ * The horizontal-overflow bug this closes only showed up against the *live* `GameScreen` route,
+ * never `BoardScreen`'s `?fen=` sandbox the earlier assertions in this file use — see
+ * `TASKS.md`'s "found, not fixed" entry. `scrollWidth > clientWidth` is what actually lets the
+ * page pan sideways; checking only the board's own bounding box (as the vertical-fit assertions
+ * above do) can't catch a horizontal overflow one level up in a differently-padded ancestor.
+ */
+test('the live game screen never overflows the viewport horizontally at 390x844', async ({ browser }) => {
+  const { hostContext, guestContext, hostPage } = await startSoloGame(browser);
+  try {
+    await hostPage.setViewportSize({ width: 390, height: 844 });
+
+    const overflow = await hostPage.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+
+    const box = await boardBox(hostPage);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+  } finally {
+    await hostContext.close();
+    await guestContext.close();
+  }
+});
+
 for (const viewport of [
   { width: 390, height: 844 }, // fits without scrolling — baseline sanity check
   { width: 390, height: 650 }, // short phone (empirically: an iPhone-SE-class dvh forces

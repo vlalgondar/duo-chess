@@ -34,7 +34,9 @@ export function BottomSheet({ teamPanel, chat }: BottomSheetProps) {
         // three buttons vs. the one-line placeholder) grows the sheet instead of pushing
         // Accept/Reject below the fixed-position box and out of the viewport (§5.10:
         // "pinned above the tabs so Accept/Reject is always reachable without expanding").
-        expanded ? 'h-[60dvh]' : 'min-h-[120px]'
+        // `svh`, not `dvh` — `dvh` tracks the mobile toolbar collapsing/expanding, so the
+        // expanded sheet would grow and shrink while the page scrolls; `svh` is stable.
+        expanded ? 'h-[60svh]' : 'min-h-[120px]'
       }`}
     >
       <button

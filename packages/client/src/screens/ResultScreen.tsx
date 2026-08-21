@@ -2,16 +2,19 @@ import { useState } from 'react';
 import { Chess } from 'chess.js';
 import { GAME_OVER_REASON, type ClientRoomView } from '@duo/shared';
 import { Board } from '../components/Board.js';
+import { CapturedTray } from '../components/CapturedTray.js';
 import { LeaveButton } from '../ui/LeaveButton.js';
 import { Button } from '../ui/Button.js';
 import { Panel } from '../ui/Panel.js';
 import { Check, Copy } from '../ui/Icon.js';
+import { materialFromFen } from '../material.js';
 
 // Chrome tally at >=900px: `p-6` (48) + banner (text-2xl 32 + py-3 24 + border 2 = 58) +
-// `gap-6` (24) = 130; 150 leaves 20px slack. Mirrors GameScreen's `BOARD_SIZE_CLASSNAME`
+// `gap-6` (24) + the captured-material row (~28px tall, plus another `gap-6`/24 from the same
+// flex column) = 178, rounded up to 202 for slack. Mirrors GameScreen's `BOARD_SIZE_CLASSNAME`
 // deduction comment — see that file for why this is a hand-tallied constant, not derived.
 const BOARD_SIZE_CLASSNAME =
-  'mx-auto w-full max-w-[420px] min-[900px]:max-w-[max(320px,min(720px,calc(100dvh_-_150px)))]';
+  'mx-auto w-full max-w-[420px] min-[900px]:max-w-[max(320px,min(720px,calc(100dvh_-_202px)))]';
 
 interface ResultScreenProps {
   view: ClientRoomView;
@@ -50,6 +53,10 @@ export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
       ? 'border-danger/50 bg-danger/10 text-danger-hi'
       : 'border-line bg-surface text-text';
 
+  // Client-derived (`material.ts`) — same as `GameScreen`'s live rows, just computed once here
+  // rather than on every render (this screen is static, so no `useMemo` is needed for it).
+  const material = materialFromFen(game.fen);
+
   return (
     <main className="flex min-h-dvh flex-col items-center gap-6 p-6 min-[900px]:h-dvh min-[900px]:flex-row min-[900px]:items-stretch min-[900px]:justify-center">
       {/* `flex-1` (mirrors GameScreen's board column) — without it the row gives this column
@@ -67,6 +74,24 @@ export function ResultScreen({ view, onRematch, onLeave }: ResultScreenProps) {
         </h1>
 
         <Board serverFen={game.fen} orientation={orientation} locked sizeClassName={BOARD_SIZE_CLASSNAME} />
+
+        {/* §5.6/§5.5: the game's final captured-piece tallies and point differential — same
+            derivation and glyphs as `GameScreen`'s live rows, just combined into one row since
+            there's no clock/name row here to fold it into. Each side's `CapturedTray` renders
+            nothing when it has neither pieces nor an advantage, so a draw with no captures
+            collapses this row to zero visible content (the `gap-6` above it is the only cost). */}
+        <div className="flex items-center justify-center gap-6" data-testid="result-material">
+          <CapturedTray
+            pieces={material.capturedByWhite}
+            capturedColor="b"
+            advantage={Math.max(0, material.advantage)}
+          />
+          <CapturedTray
+            pieces={material.capturedByBlack}
+            capturedColor="w"
+            advantage={Math.max(0, -material.advantage)}
+          />
+        </div>
       </div>
 
       {/* `contents` below 900px keeps these as plain siblings of the banner/board in `main`'s

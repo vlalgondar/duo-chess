@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   generateRoomCode,
   parseServerMessage,
@@ -60,9 +60,7 @@ export function App() {
   const status = useRoomStore((s) => s.status);
   const view = useRoomStore((s) => s.view);
   const joinError = useRoomStore((s) => s.joinError);
-  const serverClockOffsetMs = useRoomStore((s) => s.serverClockOffsetMs);
   const lastError = useRoomStore((s) => s.lastError);
-  const rttMs = useRoomStore((s) => s.rttMs);
   const soundEnabled = useRoomStore((s) => s.soundEnabled);
   const toggleSound = useRoomStore((s) => s.toggleSound);
   const setStatus = useRoomStore((s) => s.setStatus);
@@ -249,11 +247,15 @@ export function App() {
   };
 
   /** Home's "Create Room": resets the §6 collision-retry counter — the one thing `connect()`
-   * itself can't do, since its own internal retries call it again with a fresh code. */
-  const handleCreateRoom = (username: string) => {
+   * itself can't do, since its own internal retries call it again with a fresh code.
+   * `connect`/`openSocket` are deliberately left as plain (non-`useCallback`) closures — see
+   * their own doc comments — but they only ever touch refs and stable store actions themselves,
+   * so closing over whichever render's copy this callback was created with is behaviorally
+   * identical to closing over the latest one. */
+  const handleCreateRoom = useCallback((username: string) => {
     createAttemptRef.current = 0;
     connect(generateRoomCode(), username, undefined, true);
-  };
+  }, []);
 
   // §9: "resume tokens ... handles refreshes." A page load with a saved
   // session skips Home entirely and rejoins straight into the room; a
@@ -305,65 +307,70 @@ export function App() {
 
   useWakeLock(view?.phase === 'IN_GAME');
 
-  const handleStart = () => {
+  // Every handler below only closes over refs (`wsRef`, `codeRef`, …) and stable Zustand
+  // actions, never over props or state that changes render-to-render — so an empty dep array is
+  // correct, not just convenient. Without this, each one was a fresh function identity on every
+  // render, which defeated `React.memo(Board)` and friends regardless of anything else memoized
+  // upstream, since a prop that's "a new function every time" always compares unequal.
+  const handleStart = useCallback(() => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'start_game' });
-  };
+  }, []);
 
-  const handleUpdateSettings = (settings: RoomSettings) => {
+  const handleUpdateSettings = useCallback((settings: RoomSettings) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'update_settings', settings });
-  };
+  }, []);
 
-  const handleSetTeam = (team: Team | null) => {
+  const handleSetTeam = useCallback((team: Team | null) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'set_team', team });
-  };
+  }, []);
 
-  const handleSetReady = (ready: boolean) => {
+  const handleSetReady = useCallback((ready: boolean) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'set_ready', ready });
-  };
+  }, []);
 
-  const handleRandomizeTeams = () => {
+  const handleRandomizeTeams = useCallback(() => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'randomize_teams' });
-  };
+  }, []);
 
-  const handleBackToLobby = () => {
+  const handleBackToLobby = useCallback(() => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'back_to_lobby' });
-  };
+  }, []);
 
-  const handlePromoteSpectator = (publicId: string, team: Team) => {
+  const handlePromoteSpectator = useCallback((publicId: string, team: Team) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'promote_spectator', publicId, team });
-  };
+  }, []);
 
-  const handleMove = (from: Square, to: Square, promotion?: PromotionPiece) => {
+  const handleMove = useCallback((from: Square, to: Square, promotion?: PromotionPiece) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'propose', from, to, promotion });
-  };
+  }, []);
 
-  const handleAccept = (proposalId: string) => {
+  const handleAccept = useCallback((proposalId: string) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'accept', proposalId });
-  };
+  }, []);
 
-  const handleReject = (proposalId: string) => {
+  const handleReject = useCallback((proposalId: string) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'reject', proposalId });
-  };
+  }, []);
 
-  const handleWithdraw = (proposalId: string) => {
+  const handleWithdraw = useCallback((proposalId: string) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'withdraw', proposalId });
-  };
+  }, []);
 
-  const handleSendChat = (text: string, channel: ChatChannel) => {
+  const handleSendChat = useCallback((text: string, channel: ChatChannel) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'chat', text, channel });
-  };
+  }, []);
 
-  const handleAnnotate = (annotations: WireAnnotation[]) => {
+  const handleAnnotate = useCallback((annotations: WireAnnotation[]) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'annotate', annotations });
-  };
+  }, []);
 
-  const handleVote = (kind: TeamVoteKind) => {
+  const handleVote = useCallback((kind: TeamVoteKind) => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'vote', kind });
-  };
+  }, []);
 
-  const handleRematch = () => {
+  const handleRematch = useCallback(() => {
     if (wsRef.current) sendMessage(wsRef.current, { t: 'rematch' });
-  };
+  }, []);
 
   /**
    * §5.7's `leave`: back to Home, seat freed server-side. Order matters — guard
@@ -372,7 +379,7 @@ export function App() {
    * `webSocketClose`), and `resetRoom()` last since it's what actually swaps the
    * screen to Home.
    */
-  const handleLeave = () => {
+  const handleLeave = useCallback(() => {
     const ws = wsRef.current;
     intentionalLeaveRef.current = true;
     clearReconnectTimer();
@@ -385,7 +392,9 @@ export function App() {
     reconnectAttemptRef.current = 0;
     clearSession();
     resetRoom();
-  };
+    // `clearReconnectTimer` is a plain closure recreated each render, not a dependency here —
+    // it only ever touches `reconnectTimerRef`, so any render's copy behaves identically.
+  }, [resetRoom]);
 
   if (boardFen) {
     return <BoardScreen initialFen={boardFen} />;
@@ -411,7 +420,7 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
-        <RttIndicator rttMs={rttMs} />
+        <RttIndicator />
         <GameScreen
           view={view}
           onMove={handleMove}
@@ -421,7 +430,6 @@ export function App() {
           onSendChat={handleSendChat}
           onAnnotate={handleAnnotate}
           onVote={handleVote}
-          serverClockOffsetMs={serverClockOffsetMs}
           soundEnabled={soundEnabled}
           onToggleSound={toggleSound}
         />
@@ -433,7 +441,7 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
-        <RttIndicator rttMs={rttMs} />
+        <RttIndicator />
         <TeamSelect
           view={view}
           lastError={lastError}
@@ -453,7 +461,7 @@ export function App() {
     return (
       <>
         {reconnecting && <ReconnectBanner />}
-        <RttIndicator rttMs={rttMs} />
+        <RttIndicator />
         <ResultScreen view={view} onRematch={handleRematch} onLeave={handleLeave} />
       </>
     );

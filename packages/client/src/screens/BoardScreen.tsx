@@ -11,14 +11,18 @@ interface BoardScreenProps {
 
 // `docs/DESIGN.md` §5.10's exact formula. Below 900px the peeked bottom sheet (120px) plus
 // the flip button/margins above it need headroom, so the board caps at viewport height minus
-// that chrome rather than the raw `100dvh`. At ≥900px the bottom sheet is gone (replaced by
+// that chrome rather than the raw `100svh`. At ≥900px the bottom sheet is gone (replaced by
 // `side-panel`), but this screen's own chrome — `p-6` main padding + one `gap-4` + the Flip
 // board button — still adds up (~108px), so the same "min(cap, calc(100dvh - chrome))" pattern
 // applies there too (matching `GameScreen.tsx`'s desktop formula) instead of a flat max-w that
 // can force the page to scroll on a short window. `w-full` (kept from before) still shrinks the
-// board for a narrow-but->=900px window; `max-w` is what adds the height ceiling.
+// board for a narrow-but->=900px window; `max-w` is what adds the height ceiling. Mobile uses
+// `svh` (stable with the toolbar shown) rather than `dvh` (which tracks the toolbar
+// collapsing/expanding and would resize the board mid-scroll) — see `GameScreen.tsx`'s matching
+// comment. `- 32px` on the width accounts for this column's own `p-4`; without it the board
+// overflows the viewport sideways by that much.
 const BOARD_SIZE_CLASSNAME =
-  'mx-auto w-[min(100vw,calc(100dvh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[max(360px,min(560px,calc(100dvh_-_160px)))]';
+  'mx-auto w-[min(calc(100vw_-_32px),calc(100svh_-_220px))] min-[900px]:w-full min-[900px]:max-w-[max(360px,min(560px,calc(100dvh_-_160px)))]';
 
 /**
  * Local-only board sandbox (`docs/DESIGN.md` M2 — no networking until T-13/T-14). Reached via
@@ -33,9 +37,14 @@ export function BoardScreen({ initialFen }: BoardScreenProps) {
   return (
     <main
       data-testid="game-shell"
-      className="flex min-h-dvh flex-col min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
+      className="flex min-h-svh flex-col min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-center min-[900px]:gap-6 min-[900px]:p-6"
     >
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pb-[220px] min-[900px]:p-0">
+      {/* `justify-center` is desktop-only — see `GameScreen.tsx`'s matching comment: an
+          over-tall mobile column centered against the *current* viewport shifts position as the
+          toolbar collapses/expands even with `svh` pinning the column's own minimum height,
+          since it's the live viewport-vs-content gap doing the centering. Top-aligning removes
+          that dependency entirely. */}
+      <div className="flex flex-1 flex-col items-center gap-4 p-4 pb-[220px] min-[900px]:justify-center min-[900px]:p-0">
         <Board initialFen={initialFen} orientation={orientation} sizeClassName={BOARD_SIZE_CLASSNAME} />
         <Button
           type="button"
